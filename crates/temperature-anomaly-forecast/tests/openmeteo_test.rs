@@ -54,10 +54,10 @@ fn url_for_hour_format() {
     let om = OpenMeteoClient::new();
     let run = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     let time = Utc.with_ymd_and_hms(2026, 5, 26, 3, 0, 0).unwrap();
-    let url = om.url_for_hour(run, time, "temperature_2m");
+    let url = om.url_for_hour(run, time);
     assert_eq!(
         url,
-        "https://example.test/data_spatial/meteofrance_arpege_europe/2026/05/26/0000Z/temperature_2m/2026-05-26T0300.om"
+        "https://example.test/data_spatial/meteofrance_arpege_europe/2026/05/26/0000Z/2026-05-26T0300.om"
     );
     unsafe {
         std::env::remove_var("OPENMETEO_BASE_URL");

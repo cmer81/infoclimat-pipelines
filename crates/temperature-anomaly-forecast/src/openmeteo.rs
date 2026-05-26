@@ -17,7 +17,6 @@ use reqwest::Client;
 
 const BASE_URL_ENV: &str = "OPENMETEO_BASE_URL";
 const DEFAULT_BASE: &str = "https://map-tiles.open-meteo.com";
-const DEFAULT_VARIABLE: &str = "temperature_2m";
 const DOMAIN: &str = "meteofrance_arpege_europe";
 
 pub struct OpenMeteoClient {
@@ -56,17 +55,17 @@ impl OpenMeteoClient {
             .and_utc()
     }
 
-    /// URL d'un OMfile horaire ARPEGE France pour `time` à partir du `model_run`.
+    /// URL d'un OMfile horaire ARPEGE Europe pour `time` à partir du `model_run`.
     ///
-    /// Schéma : `{base}/data_spatial/meteofrance_arpege_europe/{Y}/{M}/{D}/{HH}{mm}Z/{var}/{Y}-{M}-{D}T{HH}{mm}.om`
-    pub fn url_for_hour(
-        &self,
-        model_run: DateTime<Utc>,
-        time: DateTime<Utc>,
-        variable: &str,
-    ) -> String {
+    /// Schéma (calqué sur `infoclimat-om-worker/src/aggregate.rs::source_url`) :
+    /// `{base}/data_spatial/{domain}/{Y}/{M}/{D}/{HH}{mm}Z/{Y}-{M}-{D}T{HH}{mm}.om`
+    ///
+    /// La variable n'apparaît PAS dans le path. Les OMfiles `data_spatial` ne
+    /// contiennent qu'une seule variable nommée comme enfant du root, le path
+    /// HTTP n'a donc pas besoin de la nommer.
+    pub fn url_for_hour(&self, model_run: DateTime<Utc>, time: DateTime<Utc>) -> String {
         format!(
-            "{base}/data_spatial/{domain}/{y:04}/{m:02}/{d:02}/{hh:02}{mm:02}Z/{var}/{t}.om",
+            "{base}/data_spatial/{domain}/{y:04}/{m:02}/{d:02}/{hh:02}{mm:02}Z/{t}.om",
             base = self.base.trim_end_matches('/'),
             domain = DOMAIN,
             y = model_run.year(),
@@ -74,7 +73,6 @@ impl OpenMeteoClient {
             d = model_run.day(),
             hh = model_run.hour(),
             mm = model_run.minute(),
-            var = variable,
             t = time.format("%Y-%m-%dT%H%M"),
         )
     }
@@ -118,7 +116,7 @@ impl OpenMeteoClient {
             if t < model_run {
                 continue;
             }
-            let url = self.url_for_hour(model_run, t, DEFAULT_VARIABLE);
+            let url = self.url_for_hour(model_run, t);
             match self.fetch_om(&url).await {
                 Ok(b) => hours.push((h, b)),
                 Err(e) => tracing::warn!(?day, hour = h, error = %e, "hourly fetch failed"),
