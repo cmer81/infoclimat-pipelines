@@ -4,9 +4,7 @@ members = [
     "crates/core",
     "crates/temperature-anomaly-climatology",
     "crates/temperature-anomaly-observed",
-    # The CLI crate below is scaffolded by later tasks; uncomment as it
-    # appears so `cargo check` at workspace root keeps working incrementally.
-    # "crates/temperature-anomaly-forecast",
+    "crates/temperature-anomaly-forecast",
 ]
 
 [workspace.package]

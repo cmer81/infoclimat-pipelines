@@ -2936,6 +2936,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "temperature-anomaly-forecast"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "ndarray 0.17.2",
+ "omfiles",
+ "pipeline-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "temperature-anomaly-observed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "dotenvy",
+ "ndarray 0.17.2",
+ "pipeline-core",
+ "serde",
+ "serde_json",
+ "temperature-anomaly-climatology",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
