@@ -49,9 +49,19 @@ impl R2Client {
             .credentials_provider(credentials)
             .load()
             .await;
+        // R2 ne supporte pas les checksums trailer (CRC32) que le SDK AWS 1.x
+        // active par défaut (`WhenSupported`). Sans ce paramètre, R2 répond
+        // SignatureDoesNotMatch sur le PUT car le SDK signe `x-amz-checksum-crc32`
+        // que R2 calcule différemment.
         let s3_cfg = aws_sdk_s3::config::Builder::from(&shared)
             .endpoint_url(endpoint)
             .force_path_style(true)
+            .request_checksum_calculation(
+                aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired,
+            )
+            .response_checksum_validation(
+                aws_sdk_s3::config::ResponseChecksumValidation::WhenRequired,
+            )
             .build();
         Ok(Self {
             client: Client::from_conf(s3_cfg),
@@ -60,10 +70,16 @@ impl R2Client {
     }
 
     pub async fn upload_file(&self, key: &str, local: &Path) -> Result<()> {
-        let body = aws_sdk_s3::primitives::ByteStream::from_path(local)
-            .await
+        // Lit en mémoire et passe en `ByteStream::from(Bytes)` plutôt que
+        // `ByteStream::from_path` : ce dernier déclenche un upload chunked
+        // avec checksum trailer que Cloudflare R2 ne supporte pas toujours
+        // (silent 4xx). Pour nos fichiers (< 1 MB) le coût mémoire est nul.
+        let data = std::fs::read(local)
             .with_context(|| format!("reading {local:?}"))?;
-        self.client
+        let bytes = bytes::Bytes::from(data);
+        let body = aws_sdk_s3::primitives::ByteStream::from(bytes);
+        match self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
@@ -72,9 +88,22 @@ impl R2Client {
             .cache_control("public, max-age=31536000, immutable")
             .send()
             .await
-            .with_context(|| format!("upload {key}"))?;
-        tracing::info!(key, "uploaded to R2");
-        Ok(())
+        {
+            Ok(_) => {
+                tracing::info!(key, "uploaded to R2");
+                Ok(())
+            }
+            Err(e) => {
+                let raw = format!("{e:?}");
+                let svc = e.into_service_error();
+                let code = svc.meta().code().unwrap_or("?");
+                let msg = svc.meta().message().unwrap_or("?");
+                Err(anyhow::anyhow!(
+                    "put_object bucket={} key={key} code={code} msg={msg} raw={raw}",
+                    self.bucket
+                ))
+            }
+        }
     }
 
     pub async fn delete(&self, key: &str) -> Result<()> {
