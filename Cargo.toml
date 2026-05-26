@@ -3,9 +3,9 @@ resolver = "2"
 members = [
     "crates/core",
     "crates/temperature-anomaly-climatology",
-    # The CLI crates below are scaffolded by later tasks; uncomment as they
-    # appear so `cargo check` at workspace root keeps working incrementally.
-    # "crates/temperature-anomaly-observed",
+    "crates/temperature-anomaly-observed",
+    # The CLI crate below is scaffolded by later tasks; uncomment as it
+    # appears so `cargo check` at workspace root keeps working incrementally.
     # "crates/temperature-anomaly-forecast",
 ]
 
