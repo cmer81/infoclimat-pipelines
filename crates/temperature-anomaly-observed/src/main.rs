@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{Duration, NaiveDate, Utc};
 use clap::Parser;
-use ndarray::Array2;
+use pipeline_core::anomaly::subtract_with_nan;
 use pipeline_core::climatology::{ClimatologyCache, day_of_year_index};
 use pipeline_core::grid::{ArpegeFranceGrid, Bbox};
 use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
@@ -156,22 +156,6 @@ async fn process_day(
     Ok(())
 }
 
-/// Soustraction élément-à-élément avec propagation NaN (`a - b`, NaN si l'un
-/// des opérandes est NaN). Helper local — le pipeline forecast aura besoin du
-/// même traitement (cf. note de report).
-fn subtract_with_nan(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
-    debug_assert_eq!(a.dim(), b.dim(), "shape mismatch in subtract_with_nan");
-    Array2::from_shape_fn(a.dim(), |(j, i)| {
-        let av = a[[j, i]];
-        let bv = b[[j, i]];
-        if av.is_nan() || bv.is_nan() {
-            f32::NAN
-        } else {
-            av - bv
-        }
-    })
-}
-
 /// Extrait `YYYY-MM-DD` de la queue d'une clé R2 type `…/YYYY-MM-DD.om`.
 fn parse_date_from_key(key: &str) -> Option<NaiveDate> {
     let filename = Path::new(key).file_name()?.to_str()?;
@@ -182,7 +166,6 @@ fn parse_date_from_key(key: &str) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
 
     #[test]
     fn parse_date_from_key_extracts_date() {
@@ -200,16 +183,5 @@ mod tests {
     #[test]
     fn parse_date_from_key_rejects_wrong_extension() {
         assert_eq!(parse_date_from_key("anomaly/observed/2026-05-26.txt"), None);
-    }
-
-    #[test]
-    fn subtract_with_nan_propagates_nan() {
-        let a = array![[1.0_f32, f32::NAN], [3.0, 4.0]];
-        let b = array![[0.5_f32, 1.0], [f32::NAN, 1.0]];
-        let out = subtract_with_nan(&a, &b);
-        assert!((out[[0, 0]] - 0.5).abs() < 1e-6);
-        assert!(out[[0, 1]].is_nan());
-        assert!(out[[1, 0]].is_nan());
-        assert!((out[[1, 1]] - 3.0).abs() < 1e-6);
     }
 }

@@ -1,3 +1,4 @@
+pub mod anomaly;
 pub mod climatology;
 pub mod grid;
 pub mod logging;
