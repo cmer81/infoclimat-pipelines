@@ -10,7 +10,7 @@ use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
 use pipeline_core::regrid::bilinear_regrid;
 
-use temperature_anomaly_climatology::build::{doy_mean_across_years, smooth_climatology_15d};
+use temperature_anomaly_climatology::build::{DoyAccumulator, smooth_climatology_15d};
 use temperature_anomaly_climatology::netcdf::{aggregate_daily_mean, read_era5_hourly};
 
 #[derive(Debug, Parser)]
@@ -47,9 +47,12 @@ async fn main() -> Result<()> {
         .with_context(|| format!("creating {:?}", args.output_dir))?;
 
     // 1. Lire chaque NetCDF annuel, agréger en moyennes journalières,
-    //    regridder sur la grille ARPEGE France, convertir K → °C.
+    //    regridder sur la grille ARPEGE Europe, convertir K → °C, et
+    //    accumuler dans une somme glissante par DOY. On ne garde JAMAIS
+    //    plus d'une année en mémoire (cf. DoyAccumulator) — indispensable
+    //    sur la grille Europe (521×741) où 30 ans = ~17 GB sinon.
     let dst_grid = ArpegeEuropeGrid::default();
-    let mut per_year: HashMap<i32, HashMap<u32, Array2<f32>>> = HashMap::new();
+    let mut acc = DoyAccumulator::new();
 
     for year in args.year_start..=args.year_end {
         let path = args
@@ -80,12 +83,13 @@ async fn main() -> Result<()> {
             let celsius = regridded.mapv(|v| v - 273.15);
             by_doy.insert(pipeline_core::climatology::day_of_year_index(day), celsius);
         }
-        per_year.insert(year, by_doy);
+        acc.add_year(by_doy);
+        // `era5` (le gros Array3 horaire) est droppé ici à la fin de l'itération.
     }
 
     // 2. Moyenne DOY-par-DOY à travers les années.
     tracing::info!("computing DOY mean across years");
-    let raw_climato = doy_mean_across_years(&per_year);
+    let raw_climato = acc.finalize();
 
     // 3. Lissage 15 jours centré.
     tracing::info!("applying 15-day smoothing");
@@ -108,7 +112,7 @@ async fn main() -> Result<()> {
                 "doy": doy,
                 "smoothing_days": 15,
                 "unit": "celsius",
-                "grid": "arpege_france",
+                "grid": "arpege_europe",
             }),
         };
         write_spatial_omfile(&local_path, arr, &dst_grid, &meta)

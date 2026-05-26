@@ -4,30 +4,64 @@ use std::collections::HashMap;
 
 use ndarray::Array2;
 
+/// Accumulateur streaming pour la moyenne DOY-par-DOY à travers les années.
+///
+/// Conçu pour ne JAMAIS garder plus d'une année en mémoire à la fois : on
+/// ajoute chaque année via [`DoyAccumulator::add_year`] (qui consomme la
+/// année et l'additionne dans une somme glissante), puis on appelle
+/// [`DoyAccumulator::finalize`] pour obtenir la moyenne.
+///
+/// Sur la grille ARPEGE Europe (521×741), garder les 30 années simultanément
+/// coûterait ~17 GB de RAM. Avec l'accumulateur on reste à ~1.5 GB (la somme
+/// glissante des 366 DOY + l'année en cours de traitement).
+#[derive(Default)]
+pub struct DoyAccumulator {
+    sums: HashMap<u32, Array2<f32>>,
+    counts: HashMap<u32, u32>,
+}
+
+impl DoyAccumulator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ajoute les moyennes journalières d'une année (indexées par DOY) à la
+    /// somme glissante. Consomme `by_doy` pour éviter les copies.
+    pub fn add_year(&mut self, by_doy: HashMap<u32, Array2<f32>>) {
+        for (doy, arr) in by_doy {
+            match self.sums.get_mut(&doy) {
+                Some(acc) => *acc += &arr,
+                None => {
+                    self.sums.insert(doy, arr);
+                }
+            }
+            *self.counts.entry(doy).or_insert(0) += 1;
+        }
+    }
+
+    /// Calcule la moyenne par DOY (somme / nombre d'années couvrant ce DOY).
+    pub fn finalize(mut self) -> HashMap<u32, Array2<f32>> {
+        for (doy, arr) in self.sums.iter_mut() {
+            let n = *self.counts.get(doy).expect("count exists for summed DOY") as f32;
+            arr.mapv_inplace(|v| v / n);
+        }
+        self.sums
+    }
+}
+
 /// Pour chaque DOY 1..=366 présent dans au moins une année, calcule la
 /// moyenne pixel-par-pixel sur toutes les années qui couvrent ce DOY.
 ///
-/// Les années sans le DOY (typiquement DOY 366 hors années bissextiles)
-/// sont simplement absentes — la moyenne est calculée sur les années
-/// disponibles.
+/// Variante non-streaming, conservée pour les tests et les petits volumes.
+/// Pour la production (grille Europe, 30 ans), préférer [`DoyAccumulator`].
 pub fn doy_mean_across_years(
     per_year: &HashMap<i32, HashMap<u32, Array2<f32>>>,
 ) -> HashMap<u32, Array2<f32>> {
-    let mut out: HashMap<u32, Array2<f32>> = HashMap::new();
-    let mut counts: HashMap<u32, u32> = HashMap::new();
+    let mut acc = DoyAccumulator::new();
     for years in per_year.values() {
-        for (&doy, arr) in years {
-            out.entry(doy)
-                .and_modify(|acc| *acc = &*acc + arr)
-                .or_insert_with(|| arr.clone());
-            *counts.entry(doy).or_insert(0) += 1;
-        }
+        acc.add_year(years.clone());
     }
-    for (doy, arr) in out.iter_mut() {
-        let n = *counts.get(doy).unwrap() as f32;
-        arr.mapv_inplace(|v| v / n);
-    }
-    out
+    acc.finalize()
 }
 
 /// Lissage glissant 15 jours centré (±7 jours) sur la climatologie.
