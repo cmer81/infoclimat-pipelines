@@ -41,6 +41,65 @@ pub fn build_valid_times(observed_keys: &[String], forecast_keys: &[String]) -> 
         .collect()
 }
 
+/// Préfixes R2 sous lesquels vivent les OMfiles d'anomalie.
+const OBSERVED_PREFIX: &str = "anomaly/temperature_2m/observed/";
+const FORECAST_PREFIX: &str = "anomaly/temperature_2m/forecast/";
+/// Préfixe de métadonnées (layout `data_spatial` attendu par le client maps).
+const META_DOMAIN_PREFIX: &str = "data_spatial/anomaly_europe";
+
+/// Liste les OMfiles d'anomalie dans R2, construit les métadonnées, et écrit
+/// `latest.json`, `in-progress.json` et `{run}/meta.json`.
+///
+/// Idempotent : appelable depuis observed et forecast indifféremment, les deux
+/// régénèrent la même vue à jour.
+pub async fn update_anomaly_metadata(r2: &R2Client) -> Result<()> {
+    let observed_keys = r2
+        .list_prefix(OBSERVED_PREFIX)
+        .await
+        .context("listing observed keys")?;
+    let forecast_keys = r2
+        .list_prefix(FORECAST_PREFIX)
+        .await
+        .context("listing forecast keys")?;
+
+    let valid_times = build_valid_times(&observed_keys, &forecast_keys);
+    if valid_times.is_empty() {
+        tracing::warn!("no anomaly OMfiles found — skipping metadata write");
+        return Ok(());
+    }
+
+    // reference_time synthétique = aujourd'hui 00:00Z.
+    let today = chrono::Utc::now().date_naive();
+    let reference_time = format!("{}T00:00:00Z", today.format("%Y-%m-%d"));
+
+    let meta = DomainMetadataJson {
+        reference_time: reference_time.clone(),
+        valid_times,
+        variables: vec!["temperature_2m_anomaly".to_string()],
+    };
+    let json = serde_json::to_vec(&meta).context("serializing metadata")?;
+
+    // run path dérivé de reference_time : YYYY/MM/DD/HHMMZ = aujourd'hui/0000Z
+    let run_path = format!("{}/0000Z", today.format("%Y/%m/%d"));
+
+    // Cache court : les métadonnées changent à chaque run.
+    let cc = "public, max-age=300";
+    let ct = "application/json";
+
+    for key in [
+        format!("{META_DOMAIN_PREFIX}/latest.json"),
+        format!("{META_DOMAIN_PREFIX}/in-progress.json"),
+        format!("{META_DOMAIN_PREFIX}/{run_path}/meta.json"),
+    ] {
+        r2.put_bytes(&key, json.clone(), ct, cc)
+            .await
+            .with_context(|| format!("writing {key}"))?;
+    }
+
+    tracing::info!(reference_time, "anomaly metadata written");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
