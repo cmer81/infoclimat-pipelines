@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use clap::Parser;
-use ndarray::Array2;
 use pipeline_core::grid::{ArpegeEuropeGrid, Bbox};
 use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
