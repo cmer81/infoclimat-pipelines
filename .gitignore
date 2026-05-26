@@ -6,3 +6,6 @@ work/
 era5_input/
 climato_out/
 climato/
+
+# logs de build/download (artefacts locaux)
+*.log
