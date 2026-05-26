@@ -3,7 +3,7 @@
 //! 2. Détermine le run ARPEGE le plus récent (`OpenMeteoClient::latest_model_run`).
 //! 3. Pour chaque jour `J ∈ [today, today + days_ahead]` :
 //!    a. Récupère les 24 OMfiles horaires disponibles.
-//!    b. Décode chacun, convertit K → °C, accumule (somme + count par pixel).
+//!    b. Décode chacun (déjà en °C chez Open-Meteo), accumule (somme + count).
 //!    c. Moyenne journalière, NaN si count==0.
 //!    d. Soustrait la climato du DOY.
 //!    e. Écrit l'OMfile spatial local + upload R2 (clé `{prefix}/YYYY-MM-DD.om`).
@@ -32,7 +32,7 @@ use temperature_anomaly_forecast::openmeteo::OpenMeteoClient;
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Compute daily forecast temperature anomalies (ARPEGE France via Open-Meteo) and upload to R2"
+    about = "Compute daily forecast temperature anomalies (ARPEGE Europe via Open-Meteo) and upload to R2"
 )]
 struct Args {
     /// Nombre de jours en avant à recalculer (J..J+days_ahead).
@@ -119,12 +119,15 @@ async fn process_day(
 
     for (_h, bytes) in &hours {
         let arr = read_omfile_bytes(bytes, dst_grid)?;
-        // K → °C, NaN-skip.
+        // Les OMfiles `temperature_2m` data_spatial d'Open-Meteo sont DÉJÀ en
+        // °C (le client maps les rend directement contre une échelle °C). Pas
+        // de conversion K→°C ici, contrairement à la climato/observed qui lisent
+        // ERA5 NetCDF en Kelvin.
         for ((j, i), &v) in arr.indexed_iter() {
             if v.is_nan() {
                 continue;
             }
-            acc[[j, i]] += v - 273.15;
+            acc[[j, i]] += v;
             counts[[j, i]] += 1;
         }
     }
@@ -147,7 +150,7 @@ async fn process_day(
     let filename = format!("{day}.om");
     let local_path = args.work_dir.join(&filename);
     let meta = OmfileMetadata {
-        source: format!("arpege_france_{}", model_run.format("%Y%m%dT%HZ")),
+        source: format!("arpege_europe_{}", model_run.format("%Y%m%dT%HZ")),
         generated_at: Utc::now(),
         extra: serde_json::json!({
             "day": day.to_string(),
@@ -164,14 +167,15 @@ async fn process_day(
             args.r2_anomaly_prefix.trim_end_matches('/'),
             filename
         );
-        r2.upload_file(&key, &local_path).await?;
+        r2.upload_file(&key, &local_path, pipeline_core::r2::CACHE_ROLLING)
+            .await?;
     }
     Ok(())
 }
 
 /// Décode un OMfile spatial Open-Meteo (variable `temperature_2m`) fourni
 /// sous forme de `Bytes` en mémoire. Vérifie que les dimensions correspondent
-/// à la grille ARPEGE France (180×105).
+/// à la grille ARPEGE Europe (741×521).
 fn read_omfile_bytes(bytes: &Bytes, dst_grid: &ArpegeEuropeGrid) -> Result<Array2<f32>> {
     let backend = Arc::new(InMemoryBackend::new(bytes.to_vec()));
     let root = OmFileReader::new(backend)
@@ -193,7 +197,7 @@ fn read_omfile_bytes(bytes: &Bytes, dst_grid: &ArpegeEuropeGrid) -> Result<Array
     let nx = dims[1] as usize;
     anyhow::ensure!(
         ny == dst_grid.ny() && nx == dst_grid.nx(),
-        "OMfile dims ({ny}, {nx}) != ARPEGE France ({}, {})",
+        "OMfile dims ({ny}, {nx}) != ARPEGE Europe ({}, {})",
         dst_grid.ny(),
         dst_grid.nx()
     );

@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("write DOY {doy}"))?;
         if let Some(r2) = &r2 {
             let key = format!("{}/{}", args.r2_prefix.trim_end_matches('/'), filename);
-            r2.upload_file(&key, &local_path)
+            r2.upload_file(&key, &local_path, pipeline_core::r2::CACHE_IMMUTABLE)
                 .await
                 .with_context(|| format!("upload DOY {doy}"))?;
         }

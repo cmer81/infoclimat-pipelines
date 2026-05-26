@@ -152,7 +152,8 @@ async fn process_day(
 
     if let Some(r2) = r2 {
         let key = format!("{}/{}", args.r2_anomaly_prefix.trim_end_matches('/'), filename);
-        r2.upload_file(&key, &local_path).await?;
+        r2.upload_file(&key, &local_path, pipeline_core::r2::CACHE_ROLLING)
+            .await?;
     }
 
     // Nettoyage du NetCDF volumineux (l'OMfile reste si on veut le ré-inspecter).

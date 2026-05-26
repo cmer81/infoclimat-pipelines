@@ -11,6 +11,12 @@ use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 
+/// Cache-control pour les fichiers jamais modifiés (climatologie).
+pub const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+/// Cache-control pour les fichiers réécrits régulièrement (anomalies
+/// observed/forecast). Cache court pour que les clients voient les mises à jour.
+pub const CACHE_ROLLING: &str = "public, max-age=900";
+
 pub struct R2Config {
     pub account_id: String,
     pub access_key: String,
@@ -69,11 +75,15 @@ impl R2Client {
         })
     }
 
-    pub async fn upload_file(&self, key: &str, local: &Path) -> Result<()> {
+    pub async fn upload_file(&self, key: &str, local: &Path, cache_control: &str) -> Result<()> {
         // Lit en mémoire et passe en `ByteStream::from(Bytes)` plutôt que
         // `ByteStream::from_path` : ce dernier déclenche un upload chunked
         // avec checksum trailer que Cloudflare R2 ne supporte pas toujours
         // (silent 4xx). Pour nos fichiers (< 1 MB) le coût mémoire est nul.
+        //
+        // `cache_control` : `CACHE_IMMUTABLE` pour la climato (jamais modifiée),
+        // `CACHE_ROLLING` pour les anomalies observed/forecast réécrites à
+        // chaque run.
         let data = std::fs::read(local)
             .with_context(|| format!("reading {local:?}"))?;
         let bytes = bytes::Bytes::from(data);
@@ -85,7 +95,7 @@ impl R2Client {
             .key(key)
             .body(body)
             .content_type("application/octet-stream")
-            .cache_control("public, max-age=31536000, immutable")
+            .cache_control(cache_control)
             .send()
             .await
         {
