@@ -1,0 +1,26 @@
+[package]
+name = "temperature-anomaly-climatology"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "temperature_anomaly_climatology"
+path = "src/lib.rs"
+
+[[bin]]
+name = "temperature-anomaly-climatology"
+path = "src/main.rs"
+
+[dependencies]
+pipeline-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+ndarray.workspace = true
+netcdf.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+dotenvy.workspace = true

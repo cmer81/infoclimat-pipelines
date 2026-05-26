@@ -2,9 +2,9 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/temperature-anomaly-climatology",
     # The CLI crates below are scaffolded by later tasks; uncomment as they
     # appear so `cargo check` at workspace root keeps working incrementally.
-    # "crates/temperature-anomaly-climatology",
     # "crates/temperature-anomaly-observed",
     # "crates/temperature-anomaly-forecast",
 ]
@@ -48,5 +48,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 dotenvy = "0.15"
 
-# NetCDF (climato only)
-netcdf = "0.10"
+# NetCDF (climato only). `static` feature builds HDF5/libnetcdf from source
+# so the crate works on machines without system HDF5 (CI Ubuntu images get
+# it via apt; locally on Debian-likes without libhdf5-dev installed it
+# would otherwise fail at build time).
+netcdf = { version = "0.10", features = ["static"] }
