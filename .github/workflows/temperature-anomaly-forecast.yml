@@ -1,0 +1,48 @@
+name: temperature-anomaly-forecast
+
+on:
+  schedule:
+    - cron: '0 3,9,15,21 * * *'  # 1h après chaque run ARPEGE (00/06/12/18Z)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+      R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RUST_LOG: info
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+
+      - name: Build cargo binary (release)
+        run: cargo build --release -p temperature-anomaly-forecast
+
+      - name: Download climatology from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          mkdir -p climato
+          aws s3 cp \
+            s3://${{ secrets.R2_BUCKET }}/climatology/temperature_2m/era5_1991-2020/arpege_france/ \
+            climato/ \
+            --recursive \
+            --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+
+      - name: Run forecast pipeline
+        run: |
+          mkdir -p work
+          ./target/release/temperature-anomaly-forecast \
+            --days-ahead 4 \
+            --climato-dir climato \
+            --work-dir work \
+            --r2-anomaly-prefix anomaly/temperature_2m/forecast

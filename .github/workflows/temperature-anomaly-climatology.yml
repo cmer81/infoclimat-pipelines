@@ -1,0 +1,63 @@
+name: temperature-anomaly-climatology
+
+on:
+  workflow_dispatch:
+    inputs:
+      year_start:
+        description: 'Year start (inclusive)'
+        default: '1991'
+      year_end:
+        description: 'Year end (inclusive)'
+        default: '2020'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720  # téléchargement ERA5 30 ans peut être long
+    env:
+      CDS_API_KEY: ${{ secrets.CDS_API_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+      R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RUST_LOG: info
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: pip install -r scripts/requirements.txt
+
+      - name: Build cargo binary (release)
+        run: cargo build --release -p temperature-anomaly-climatology
+
+      - name: Download ERA5 (one file per year)
+        run: |
+          mkdir -p era5_input
+          for year in $(seq ${{ github.event.inputs.year_start }} ${{ github.event.inputs.year_end }}); do
+            python scripts/download_era5.py \
+              --year $year \
+              --bbox-north 52.0 --bbox-west -6.5 --bbox-south 40.5 --bbox-east 12.5 \
+              --output era5_input/era5_2m_temperature_${year}.nc
+          done
+
+      - name: Build climatology
+        run: |
+          ./target/release/temperature-anomaly-climatology \
+            --input-dir era5_input \
+            --output-dir climato_out \
+            --r2-prefix climatology/temperature_2m/era5_1991-2020/arpege_france \
+            --year-start ${{ github.event.inputs.year_start }} \
+            --year-end ${{ github.event.inputs.year_end }}
