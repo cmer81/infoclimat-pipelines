@@ -92,6 +92,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    if let Some(r2) = &r2 {
+        if let Err(e) = pipeline_core::anomaly_metadata::update_anomaly_metadata(r2).await {
+            tracing::error!(error = %e, "failed to update anomaly metadata");
+        }
+    }
+
     tracing::info!(written, failures, "forecast run done");
     Ok(())
 }
