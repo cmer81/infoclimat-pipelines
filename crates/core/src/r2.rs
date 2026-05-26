@@ -106,6 +106,44 @@ impl R2Client {
         }
     }
 
+    /// Écrit des bytes arbitraires sous `key` avec content-type et cache-control
+    /// explicites. Utilisé pour les métadonnées JSON (cache court car mutables).
+    pub async fn put_bytes(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+        cache_control: &str,
+    ) -> Result<()> {
+        let body = aws_sdk_s3::primitives::ByteStream::from(bytes::Bytes::from(data));
+        match self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(body)
+            .content_type(content_type)
+            .cache_control(cache_control)
+            .send()
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(key, "put_bytes to R2");
+                Ok(())
+            }
+            Err(e) => {
+                let raw = format!("{e:?}");
+                let svc = e.into_service_error();
+                let code = svc.meta().code().unwrap_or("?");
+                let msg = svc.meta().message().unwrap_or("?");
+                Err(anyhow::anyhow!(
+                    "put_object bucket={} key={key} code={code} msg={msg} raw={raw}",
+                    self.bucket
+                ))
+            }
+        }
+    }
+
     pub async fn delete(&self, key: &str) -> Result<()> {
         self.client
             .delete_object()
