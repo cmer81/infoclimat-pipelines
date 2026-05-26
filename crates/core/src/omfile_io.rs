@@ -116,8 +116,6 @@ pub fn read_spatial_omfile(path: &Path) -> Result<(Array2<f32>, OmfileMetadata)>
         .map_err(|e| anyhow::anyhow!("variable {ANOMALY_VARIABLE} n'est pas un array: {e}"))?;
     let dims: Vec<u64> = arr.get_dimensions().to_vec();
     anyhow::ensure!(dims.len() == 2, "expected 2D variable, got {}D", dims.len());
-    let ny = dims[0] as usize;
-    let nx = dims[1] as usize;
     let dynd = arr
         .read::<f32>(&[0..dims[0], 0..dims[1]])
         .map_err(|e| anyhow::anyhow!("read array: {e}"))?;
