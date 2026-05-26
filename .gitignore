@@ -1,0 +1,8 @@
+target/
+.env
+*.nc
+*.nc.tmp
+work/
+era5_input/
+climato_out/
+climato/
