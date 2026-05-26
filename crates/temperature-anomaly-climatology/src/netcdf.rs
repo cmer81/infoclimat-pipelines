@@ -131,8 +131,16 @@ fn parse_time_axis(units: &str, values: &[i64]) -> Result<(NaiveDateTime, i64)> 
         ));
     };
 
-    let epoch = NaiveDateTime::parse_from_str(rest.trim(), "%Y-%m-%d %H:%M:%S")
-        .or_else(|_| NaiveDateTime::parse_from_str(rest.trim(), "%Y-%m-%d %H:%M:%S%.f"))
+    let rest = rest.trim();
+    let epoch = NaiveDateTime::parse_from_str(rest, "%Y-%m-%d %H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(rest, "%Y-%m-%d %H:%M:%S%.f"))
+        .or_else(|_| NaiveDateTime::parse_from_str(rest, "%Y-%m-%dT%H:%M:%S"))
+        .or_else(|_| {
+            // Format "1970-01-01" seul (sans heure). Très commun dans les
+            // NetCDF récents de CDS qui utilisent "seconds since 1970-01-01".
+            chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d")
+                .map(|d| d.and_hms_opt(0, 0, 0).unwrap())
+        })
         .with_context(|| format!("parsing epoch from {rest:?}"))?;
 
     let first = *values.first().context("empty time axis")?;
