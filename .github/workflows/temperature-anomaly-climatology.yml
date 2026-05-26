@@ -49,7 +49,7 @@ jobs:
           for year in $(seq ${{ github.event.inputs.year_start }} ${{ github.event.inputs.year_end }}); do
             python scripts/download_era5.py \
               --year $year \
-              --bbox-north 52.0 --bbox-west -6.5 --bbox-south 40.5 --bbox-east 12.5 \
+              --bbox-north 73.0 --bbox-west -33.0 --bbox-south 19.0 --bbox-east 43.0 \
               --output era5_input/era5_2m_temperature_${year}.nc
           done
 
@@ -58,6 +58,6 @@ jobs:
           ./target/release/temperature-anomaly-climatology \
             --input-dir era5_input \
             --output-dir climato_out \
-            --r2-prefix climatology/temperature_2m/era5_1991-2020/arpege_france \
+            --r2-prefix climatology/temperature_2m/era5_1991-2020/arpege_europe \
             --year-start ${{ github.event.inputs.year_start }} \
             --year-end ${{ github.event.inputs.year_end }}

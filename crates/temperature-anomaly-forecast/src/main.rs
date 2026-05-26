@@ -24,7 +24,7 @@ use omfiles::{
 };
 use pipeline_core::anomaly::subtract_with_nan;
 use pipeline_core::climatology::{ClimatologyCache, day_of_year_index};
-use pipeline_core::grid::{ArpegeFranceGrid, Grid};
+use pipeline_core::grid::{ArpegeEuropeGrid, Grid};
 use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
 
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
 
     let climato = ClimatologyCache::load_from_dir(&args.climato_dir)
         .with_context(|| format!("loading climato from {:?}", args.climato_dir))?;
-    let dst_grid = ArpegeFranceGrid::default();
+    let dst_grid = ArpegeEuropeGrid::default();
 
     let r2 = if !args.skip_upload {
         Some(R2Client::new(R2Config::from_env()?).await?)
@@ -101,7 +101,7 @@ async fn process_day(
     model_run: DateTime<Utc>,
     om: &OpenMeteoClient,
     climato: &ClimatologyCache,
-    dst_grid: &ArpegeFranceGrid,
+    dst_grid: &ArpegeEuropeGrid,
     args: &Args,
     r2: Option<&R2Client>,
 ) -> Result<()> {
@@ -166,7 +166,7 @@ async fn process_day(
 /// Décode un OMfile spatial Open-Meteo (variable `temperature_2m`) fourni
 /// sous forme de `Bytes` en mémoire. Vérifie que les dimensions correspondent
 /// à la grille ARPEGE France (180×105).
-fn read_omfile_bytes(bytes: &Bytes, dst_grid: &ArpegeFranceGrid) -> Result<Array2<f32>> {
+fn read_omfile_bytes(bytes: &Bytes, dst_grid: &ArpegeEuropeGrid) -> Result<Array2<f32>> {
     let backend = Arc::new(InMemoryBackend::new(bytes.to_vec()));
     let root = OmFileReader::new(backend)
         .map_err(|e| anyhow::anyhow!("open omfile from memory: {e}"))?;
@@ -210,9 +210,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn arpege_france_grid_is_180_by_105() {
-        let g = ArpegeFranceGrid::default();
-        assert_eq!(g.nx(), 180);
-        assert_eq!(g.ny(), 105);
+    fn arpege_europe_grid_is_741_by_521() {
+        let g = ArpegeEuropeGrid::default();
+        assert_eq!(g.nx(), 741);
+        assert_eq!(g.ny(), 521);
     }
 }

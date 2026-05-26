@@ -1,5 +1,5 @@
 use ndarray::Array2;
-use pipeline_core::grid::{ArpegeFranceGrid, Bbox, Grid};
+use pipeline_core::grid::{ArpegeEuropeGrid, Bbox, Grid};
 use pipeline_core::regrid::bilinear_regrid;
 
 fn era5_source() -> (Array2<f32>, Bbox, f64) {
@@ -25,7 +25,7 @@ fn era5_source() -> (Array2<f32>, Bbox, f64) {
 #[test]
 fn bilinear_is_exact_for_linear_field() {
     let (src, src_bbox, src_dx) = era5_source();
-    let dst_grid = ArpegeFranceGrid::default();
+    let dst_grid = ArpegeEuropeGrid::default();
     let out = bilinear_regrid(&src, src_bbox, src_dx, src_dx, &dst_grid).unwrap();
 
     // Spot check : Paris. lonlat_to_indices rounds to the nearest grid node,
@@ -43,7 +43,7 @@ fn bilinear_is_exact_for_linear_field() {
 fn bilinear_propagates_nan() {
     let (mut src, src_bbox, src_dx) = era5_source();
     src[[10, 10]] = f32::NAN; // Met un NaN quelque part dans la source
-    let dst_grid = ArpegeFranceGrid::default();
+    let dst_grid = ArpegeEuropeGrid::default();
     let out = bilinear_regrid(&src, src_bbox, src_dx, src_dx, &dst_grid).unwrap();
 
     // Au moins un pixel d'output doit être NaN (ceux qui interpolent depuis le NaN)
@@ -54,7 +54,7 @@ fn bilinear_propagates_nan() {
 #[test]
 fn bilinear_output_dimensions_match_target_grid() {
     let (src, src_bbox, src_dx) = era5_source();
-    let dst_grid = ArpegeFranceGrid::default();
+    let dst_grid = ArpegeEuropeGrid::default();
     let out = bilinear_regrid(&src, src_bbox, src_dx, src_dx, &dst_grid).unwrap();
     assert_eq!(out.shape(), &[dst_grid.ny(), dst_grid.nx()]);
 }

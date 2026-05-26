@@ -13,12 +13,12 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate};
 
-use pipeline_core::grid::FRANCE_DOWNLOAD_BBOX;
+use pipeline_core::grid::EUROPE_DOWNLOAD_BBOX;
 
 /// Lance `python3 <script_path>` pour télécharger un fichier NetCDF couvrant
 /// `date` (24 heures UTC) sur la bbox France. Le script écrit dans `output`.
 pub fn download_day(date: NaiveDate, output: &Path, script_path: &Path) -> Result<()> {
-    let bbox = FRANCE_DOWNLOAD_BBOX;
+    let bbox = EUROPE_DOWNLOAD_BBOX;
     let status = Command::new("python3")
         .arg(script_path)
         .arg("--year")

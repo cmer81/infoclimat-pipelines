@@ -1,4 +1,9 @@
-//! Définition de la grille ARPEGE France.
+//! Définition de la grille ARPEGE Europe (la grille native publiée par
+//! Open-Meteo pour le domaine `meteofrance_arpege_europe`).
+//!
+//! Dimensions : 521 lignes (latitude) × 741 colonnes (longitude) à 0.1°.
+//! Origine au coin sud-ouest : (lat 20.0°, lon -32.0°). Coin nord-est :
+//! (lat 72.0°, lon 42.0°).
 
 pub trait Grid {
     fn nx(&self) -> usize;
@@ -30,32 +35,32 @@ pub trait Grid {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ArpegeFranceGrid;
+pub struct ArpegeEuropeGrid;
 
-impl Default for ArpegeFranceGrid {
+impl Default for ArpegeEuropeGrid {
     fn default() -> Self {
         Self
     }
 }
 
-impl Grid for ArpegeFranceGrid {
+impl Grid for ArpegeEuropeGrid {
     fn nx(&self) -> usize {
-        180
+        741
     }
     fn ny(&self) -> usize {
-        105
+        521
     }
     fn lon_min(&self) -> f64 {
-        -5.95
+        -32.0
     }
     fn lon_max(&self) -> f64 {
-        11.95
+        42.0
     }
     fn lat_min(&self) -> f64 {
-        41.0
+        20.0
     }
     fn lat_max(&self) -> f64 {
-        51.5
+        72.0
     }
     fn dx(&self) -> f64 {
         0.1
@@ -65,8 +70,9 @@ impl Grid for ArpegeFranceGrid {
     }
 }
 
-/// Bbox élargie pour télécharger ERA5 (couvre la grille ARPEGE France
-/// avec ~0.5° de marge pour le regridding bilinéaire).
+/// Bbox utilisée pour télécharger ERA5. Couvre la grille ARPEGE Europe
+/// avec ~1° de marge pour permettre une interpolation bilinéaire correcte
+/// jusqu'aux bords.
 #[derive(Debug, Clone, Copy)]
 pub struct Bbox {
     pub lon_min: f64,
@@ -75,9 +81,9 @@ pub struct Bbox {
     pub lat_max: f64,
 }
 
-pub const FRANCE_DOWNLOAD_BBOX: Bbox = Bbox {
-    lon_min: -6.5,
-    lon_max: 12.5,
-    lat_min: 40.5,
-    lat_max: 52.0,
+pub const EUROPE_DOWNLOAD_BBOX: Bbox = Bbox {
+    lon_min: -33.0,
+    lon_max: 43.0,
+    lat_min: 19.0,
+    lat_max: 73.0,
 };

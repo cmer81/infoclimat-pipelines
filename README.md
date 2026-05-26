@@ -10,14 +10,14 @@ Conçu pour héberger plusieurs pipelines à terme, qui partagent le crate `core
 
 ### temperature-anomaly
 
-Anomalie journalière de température 2m sur la grille ARPEGE France (0.1°),
+Anomalie journalière de température 2m sur la grille ARPEGE Europe (0.1°, 521×741),
 référence climatique ERA5 1991–2020 lissée sur fenêtre glissante 15 jours.
 
 Trois composants :
 
 | Composant | Trigger | Sortie R2 |
 |---|---|---|
-| `temperature-anomaly-climatology` | `workflow_dispatch` (manuel) | `climatology/temperature_2m/era5_1991-2020/arpege_france/{doy:03}.om` |
+| `temperature-anomaly-climatology` | `workflow_dispatch` (manuel) | `climatology/temperature_2m/era5_1991-2020/arpege_europe/{doy:03}.om` |
 | `temperature-anomaly-observed` | cron 03h UTC | `anomaly/temperature_2m/observed/{YYYY-MM-DD}.om` |
 | `temperature-anomaly-forecast` | cron 03/09/15/21h UTC | `anomaly/temperature_2m/forecast/{YYYY-MM-DD}.om` |
 
@@ -60,13 +60,13 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r scripts/requirements.txt
 
 CDS_API_KEY=<key> python scripts/download_era5.py --year 2020 \
-  --bbox-north 52.0 --bbox-west -6.5 --bbox-south 40.5 --bbox-east 12.5 \
+  --bbox-north 73.0 --bbox-west -33.0 --bbox-south 19.0 --bbox-east 43.0 \
   --output era5_input/era5_2m_temperature_2020.nc
 
 cargo run --release -p temperature-anomaly-climatology -- \
   --input-dir era5_input \
   --output-dir climato_out \
-  --r2-prefix climatology/temperature_2m/test/arpege_france \
+  --r2-prefix climatology/temperature_2m/test/arpege_europe \
   --year-start 2020 --year-end 2020 \
   --skip-upload   # retire ce flag pour pousser vers R2
 ```

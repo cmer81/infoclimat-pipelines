@@ -18,7 +18,7 @@ use reqwest::Client;
 const BASE_URL_ENV: &str = "OPENMETEO_BASE_URL";
 const DEFAULT_BASE: &str = "https://map-tiles.open-meteo.com";
 const DEFAULT_VARIABLE: &str = "temperature_2m";
-const DOMAIN: &str = "meteofrance_arpege_france";
+const DOMAIN: &str = "meteofrance_arpege_europe";
 
 pub struct OpenMeteoClient {
     http: Client,
@@ -58,7 +58,7 @@ impl OpenMeteoClient {
 
     /// URL d'un OMfile horaire ARPEGE France pour `time` à partir du `model_run`.
     ///
-    /// Schéma : `{base}/data_spatial/meteofrance_arpege_france/{Y}/{M}/{D}/{HH}{mm}Z/{var}/{Y}-{M}-{D}T{HH}{mm}.om`
+    /// Schéma : `{base}/data_spatial/meteofrance_arpege_europe/{Y}/{M}/{D}/{HH}{mm}Z/{var}/{Y}-{M}-{D}T{HH}{mm}.om`
     pub fn url_for_hour(
         &self,
         model_run: DateTime<Utc>,

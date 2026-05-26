@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use clap::Parser;
 use ndarray::Array2;
-use pipeline_core::grid::{ArpegeFranceGrid, Bbox};
+use pipeline_core::grid::{ArpegeEuropeGrid, Bbox};
 use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
 use pipeline_core::regrid::bilinear_regrid;
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 
     // 1. Lire chaque NetCDF annuel, agréger en moyennes journalières,
     //    regridder sur la grille ARPEGE France, convertir K → °C.
-    let dst_grid = ArpegeFranceGrid::default();
+    let dst_grid = ArpegeEuropeGrid::default();
     let mut per_year: HashMap<i32, HashMap<u32, Array2<f32>>> = HashMap::new();
 
     for year in args.year_start..=args.year_end {

@@ -40,7 +40,7 @@ jobs:
         run: |
           mkdir -p climato
           aws s3 cp \
-            s3://${{ secrets.R2_BUCKET }}/climatology/temperature_2m/era5_1991-2020/arpege_france/ \
+            s3://${{ secrets.R2_BUCKET }}/climatology/temperature_2m/era5_1991-2020/arpege_europe/ \
             climato/ \
             --recursive \
             --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com

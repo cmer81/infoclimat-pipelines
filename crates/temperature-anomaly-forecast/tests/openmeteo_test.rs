@@ -57,7 +57,7 @@ fn url_for_hour_format() {
     let url = om.url_for_hour(run, time, "temperature_2m");
     assert_eq!(
         url,
-        "https://example.test/data_spatial/meteofrance_arpege_france/2026/05/26/0000Z/temperature_2m/2026-05-26T0300.om"
+        "https://example.test/data_spatial/meteofrance_arpege_europe/2026/05/26/0000Z/temperature_2m/2026-05-26T0300.om"
     );
     unsafe {
         std::env::remove_var("OPENMETEO_BASE_URL");

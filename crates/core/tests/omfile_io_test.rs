@@ -1,11 +1,11 @@
 use ndarray::Array2;
-use pipeline_core::grid::{ArpegeFranceGrid, Grid};
+use pipeline_core::grid::{ArpegeEuropeGrid, Grid};
 use pipeline_core::omfile_io::{OmfileMetadata, read_spatial_omfile, write_spatial_omfile};
 use tempfile::NamedTempFile;
 
 #[test]
 fn omfile_roundtrip_preserves_data() {
-    let dst = ArpegeFranceGrid::default();
+    let dst = ArpegeEuropeGrid::default();
     let arr = Array2::<f32>::from_shape_fn((dst.ny(), dst.nx()), |(j, i)| {
         (j as f32) * 0.01 + (i as f32) * 0.001
     });

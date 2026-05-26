@@ -9,7 +9,7 @@ use chrono::{Duration, NaiveDate, Utc};
 use clap::Parser;
 use pipeline_core::anomaly::subtract_with_nan;
 use pipeline_core::climatology::{ClimatologyCache, day_of_year_index};
-use pipeline_core::grid::{ArpegeFranceGrid, Bbox};
+use pipeline_core::grid::{ArpegeEuropeGrid, Bbox};
 use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
 use pipeline_core::regrid::bilinear_regrid;
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
 
     let climato = ClimatologyCache::load_from_dir(&args.climato_dir)
         .with_context(|| format!("loading climato from {:?}", args.climato_dir))?;
-    let dst_grid = ArpegeFranceGrid::default();
+    let dst_grid = ArpegeEuropeGrid::default();
     let r2 = if !args.skip_upload {
         Some(R2Client::new(R2Config::from_env()?).await?)
     } else {
@@ -101,7 +101,7 @@ async fn process_day(
     day: NaiveDate,
     args: &Args,
     climato: &ClimatologyCache,
-    dst_grid: &ArpegeFranceGrid,
+    dst_grid: &ArpegeEuropeGrid,
     r2: Option<&R2Client>,
 ) -> Result<()> {
     let nc_path = args.work_dir.join(format!("era5_{day}.nc"));
