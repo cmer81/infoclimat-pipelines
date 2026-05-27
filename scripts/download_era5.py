@@ -68,7 +68,21 @@ def main() -> int:
         "download_format": "unarchived",
     }
 
-    client.retrieve("reanalysis-era5-single-levels", request, str(args.output))
+    try:
+        client.retrieve("reanalysis-era5-single-levels", request, str(args.output))
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        # Cas attendu : ERA5/ERA5T n'a pas encore publié cette date (délai ~5j).
+        # On sort avec un code distinct (3) + message propre, sans traceback,
+        # pour que l'appelant Rust le traite comme "skipped" et non "failed".
+        if "not available yet" in msg.lower() or "revise the period" in msg.lower():
+            print(f"not-available-yet: data not published for the requested period",
+                  file=sys.stderr)
+            return 3
+        # Vraie erreur (auth, réseau, requête invalide) : message concis, code 1.
+        print(f"cds-error: {msg.splitlines()[-1] if msg else exc}", file=sys.stderr)
+        return 1
+
     print(f"downloaded {args.output}")
     return 0
 

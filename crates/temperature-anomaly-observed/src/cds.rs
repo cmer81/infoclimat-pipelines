@@ -15,9 +15,22 @@ use chrono::{Datelike, NaiveDate};
 
 use pipeline_core::grid::EUROPE_DOWNLOAD_BBOX;
 
+/// Résultat d'une tentative de téléchargement d'un jour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadOutcome {
+    /// NetCDF téléchargé dans `output`.
+    Downloaded,
+    /// Date pas encore publiée côté ERA5/ERA5T (délai ~5 j) — cas attendu,
+    /// à retenter au prochain run. Pas une erreur.
+    NotAvailableYet,
+}
+
 /// Lance `python3 <script_path>` pour télécharger un fichier NetCDF couvrant
-/// `date` (24 heures UTC) sur la bbox France. Le script écrit dans `output`.
-pub fn download_day(date: NaiveDate, output: &Path, script_path: &Path) -> Result<()> {
+/// `date` (24 heures UTC) sur la bbox Europe. Le script écrit dans `output`.
+///
+/// Retourne `NotAvailableYet` (code de sortie 3 du script) quand la date n'est
+/// pas encore publiée — distinct d'une vraie erreur (`Err`).
+pub fn download_day(date: NaiveDate, output: &Path, script_path: &Path) -> Result<DownloadOutcome> {
     let bbox = EUROPE_DOWNLOAD_BBOX;
     let status = Command::new("python3")
         .arg(script_path)
@@ -39,6 +52,10 @@ pub fn download_day(date: NaiveDate, output: &Path, script_path: &Path) -> Resul
         .arg(output)
         .status()
         .with_context(|| format!("spawning python3 {script_path:?}"))?;
-    anyhow::ensure!(status.success(), "python download failed for {date}");
-    Ok(())
+
+    match status.code() {
+        Some(0) => Ok(DownloadOutcome::Downloaded),
+        Some(3) => Ok(DownloadOutcome::NotAvailableYet),
+        other => anyhow::bail!("python download failed for {date} (exit {other:?})"),
+    }
 }

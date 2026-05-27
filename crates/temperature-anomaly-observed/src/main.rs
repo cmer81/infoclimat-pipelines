@@ -71,12 +71,17 @@ async fn main() -> Result<()> {
 
     let today = Utc::now().date_naive();
     let mut written = 0u32;
+    let mut skipped = 0u32;
     let mut failures = 0u32;
 
     for offset in 1..=args.refresh_days {
         let day = today - Duration::days(offset);
         match process_day(day, &args, &climato, &dst_grid, r2.as_ref()).await {
-            Ok(_) => written += 1,
+            Ok(ProcessOutcome::Done) => written += 1,
+            Ok(ProcessOutcome::SkippedNotAvailable) => {
+                tracing::info!(%day, "skipped — pas encore publié côté ERA5/ERA5T (retenté demain)");
+                skipped += 1;
+            }
             Err(e) => {
                 tracing::error!(?day, error = %e, "day failed");
                 failures += 1;
@@ -109,8 +114,16 @@ async fn main() -> Result<()> {
         }
     }
 
-    tracing::info!(written, failures, "observed run done");
+    tracing::info!(written, skipped, failures, "observed run done");
     Ok(())
+}
+
+/// Issue du traitement d'un jour.
+enum ProcessOutcome {
+    /// Anomalie calculée et (éventuellement) uploadée.
+    Done,
+    /// Jour pas encore publié côté ERA5/ERA5T — à retenter au prochain run.
+    SkippedNotAvailable,
 }
 
 async fn process_day(
@@ -119,10 +132,14 @@ async fn process_day(
     climato: &ClimatologyCache,
     dst_grid: &ArpegeEuropeGrid,
     r2: Option<&R2Client>,
-) -> Result<()> {
+) -> Result<ProcessOutcome> {
     let nc_path = args.work_dir.join(format!("era5_{day}.nc"));
-    cds::download_day(day, &nc_path, &args.download_script)
-        .with_context(|| format!("download {day}"))?;
+    match cds::download_day(day, &nc_path, &args.download_script)
+        .with_context(|| format!("download {day}"))?
+    {
+        cds::DownloadOutcome::Downloaded => {}
+        cds::DownloadOutcome::NotAvailableYet => return Ok(ProcessOutcome::SkippedNotAvailable),
+    }
 
     let era5 = temperature_anomaly_climatology::netcdf::read_era5_hourly(&nc_path)?;
     let daily =
@@ -170,7 +187,7 @@ async fn process_day(
     if let Err(e) = std::fs::remove_file(&nc_path) {
         tracing::warn!(?nc_path, error = %e, "could not remove NetCDF");
     }
-    Ok(())
+    Ok(ProcessOutcome::Done)
 }
 
 /// Extrait `YYYY-MM-DD` de la queue d'une clé R2 type `…/YYYY-MM-DD.om`.
