@@ -83,9 +83,6 @@ Fenêtres :
 - **forecast** : J+0→J+4 réécrits à chaque run ; GC des fichiers dont la date est
   passée (sinon un J+0 d'hier traîne et est mal routé par le client).
 
-Spec & plans : `../docs/superpowers/specs/2026-05-26-anomalies-*` et
-`../docs/superpowers/plans/2026-05-26-anomalies-*`.
-
 ---
 
 ## Structure
