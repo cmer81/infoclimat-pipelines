@@ -72,6 +72,18 @@ pub async fn update_anomaly_metadata(r2: &R2Client) -> Result<()> {
     let today = chrono::Utc::now().date_naive();
     let reference_time = format!("{}T00:00:00Z", today.format("%Y-%m-%d"));
 
+    // Run paths `{YYYY}/{MM}/{DD}/0000Z` pour lesquels publier un meta.json.
+    // Le client (domaine `model_interval: daily`) dérive un "model run" = la
+    // date sélectionnée et va chercher `{run}/meta.json`. Il faut donc un
+    // meta.json par date sélectionnable (chaque valid_time), + aujourd'hui
+    // (reference_time). Tous ont le même contenu.
+    let mut run_paths: std::collections::BTreeSet<String> = valid_times
+        .iter()
+        .filter_map(|vt| vt.get(0..10)) // "YYYY-MM-DD"
+        .map(|d| format!("{}/0000Z", d.replace('-', "/")))
+        .collect();
+    run_paths.insert(format!("{}/0000Z", today.format("%Y/%m/%d")));
+
     let meta = DomainMetadataJson {
         reference_time: reference_time.clone(),
         valid_times,
@@ -79,24 +91,27 @@ pub async fn update_anomaly_metadata(r2: &R2Client) -> Result<()> {
     };
     let json = serde_json::to_vec(&meta).context("serializing metadata")?;
 
-    // run path dérivé de reference_time : YYYY/MM/DD/HHMMZ = aujourd'hui/0000Z
-    let run_path = format!("{}/0000Z", today.format("%Y/%m/%d"));
-
     // Cache court : les métadonnées changent à chaque run.
     let cc = "public, max-age=300";
     let ct = "application/json";
 
-    for key in [
+    let mut keys = vec![
         format!("{META_DOMAIN_PREFIX}/latest.json"),
         format!("{META_DOMAIN_PREFIX}/in-progress.json"),
-        format!("{META_DOMAIN_PREFIX}/{run_path}/meta.json"),
-    ] {
+    ];
+    keys.extend(
+        run_paths
+            .iter()
+            .map(|rp| format!("{META_DOMAIN_PREFIX}/{rp}/meta.json")),
+    );
+
+    for key in keys {
         r2.put_bytes(&key, json.clone(), ct, cc)
             .await
             .with_context(|| format!("writing {key}"))?;
     }
 
-    tracing::info!(reference_time, "anomaly metadata written");
+    tracing::info!(reference_time, runs = run_paths.len(), "anomaly metadata written");
     Ok(())
 }
 
