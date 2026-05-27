@@ -27,3 +27,6 @@ tokio.workspace = true
 tracing.workspace = true
 dotenvy.workspace = true
 omfiles.workspace = true
+
+[lints]
+workspace = true

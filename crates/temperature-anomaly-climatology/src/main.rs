@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     //    accumuler dans une somme glissante par DOY. On ne garde JAMAIS
     //    plus d'une année en mémoire (cf. DoyAccumulator) — indispensable
     //    sur la grille Europe (521×741) où 30 ans = ~17 GB sinon.
-    let dst_grid = ArpegeEuropeGrid::default();
+    let dst_grid = ArpegeEuropeGrid;
     let mut acc = DoyAccumulator::new();
 
     for year in args.year_start..=args.year_end {

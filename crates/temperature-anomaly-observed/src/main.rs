@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
 
     let climato = ClimatologyCache::load_from_dir(&args.climato_dir)
         .with_context(|| format!("loading climato from {:?}", args.climato_dir))?;
-    let dst_grid = ArpegeEuropeGrid::default();
+    let dst_grid = ArpegeEuropeGrid;
     let r2 = if !args.skip_upload {
         Some(R2Client::new(R2Config::from_env()?).await?)
     } else {

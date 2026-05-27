@@ -5,7 +5,7 @@ use tempfile::NamedTempFile;
 
 #[test]
 fn omfile_roundtrip_preserves_data() {
-    let dst = ArpegeEuropeGrid::default();
+    let dst = ArpegeEuropeGrid;
     let arr = Array2::<f32>::from_shape_fn((dst.ny(), dst.nx()), |(j, i)| {
         (j as f32) * 0.01 + (i as f32) * 0.001
     });
