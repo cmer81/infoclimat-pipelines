@@ -48,7 +48,10 @@ cargo run --release -p temperature-anomaly-forecast -- \
 
 ## CI (GitHub Actions)
 
-Un workflow par binaire dans `.github/workflows/`. Pattern observed/forecast : build release → **`aws s3 cp` de la climato depuis R2** vers `climato/` → run du binaire. La climato n'est jamais reconstruite en CI (le workflow climato dépasse la limite 6 h des runners — build initial fait en local). Secrets attendus : `CDS_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`, `R2_BUCKET`.
+Deux familles de workflows dans `.github/workflows/` :
+
+- **`ci.yml`** — gate sur push/PR (`main`) : `cargo clippy --all-targets --all-features --locked -- -D warnings` puis `cargo test --workspace`. C'est le filet qui empêche une régression d'atteindre `main` (donc les crons prod). Ne nécessite aucun secret (pas d'accès R2/CDS).
+- **Un workflow par binaire** (`temperature-anomaly-{climatology,observed,forecast}.yml`) — exécution prod. Pattern observed/forecast : build release → **`aws s3 cp` de la climato depuis R2** vers `climato/` → run du binaire. La climato n'est jamais reconstruite en CI (le workflow climato dépasse la limite 6 h des runners — build initial fait en local). Secrets attendus : `CDS_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`, `R2_BUCKET`.
 
 ## Pièges qui touchent le code (à respecter en éditant)
 
@@ -64,4 +67,5 @@ Un workflow par binaire dans `.github/workflows/`. Pattern observed/forecast : b
 ## Conventions
 
 - Suivre le skill **`rust-best-practices`** (installé dans `.agents/skills/`, symlink `.claude/skills/`) : pas de `unwrap()`/`expect()` hors tests, `thiserror` pour les libs / `anyhow` pour les binaires, `&str`/`&[T]` en paramètres, itérateurs plutôt que boucles manuelles.
+- **`clippy::all` est en `deny`** au niveau workspace (`[workspace.lints]` dans `Cargo.toml`, hérité par chaque crate via `[lints] workspace = true`) et vérifié par `ci.yml`. Ne pas silencer un lint avec `#[allow(...)]` : préférer `#[expect(clippy::…)]` avec une justification (il préviendra si le lint devient caduc).
 - `.claude/settings.local.json` est gitignoré (permissions locales perso) — ne pas le commiter.
