@@ -44,9 +44,17 @@ struct Args {
     /// Dossier de travail (OMfiles produits localement).
     #[arg(long)]
     work_dir: PathBuf,
-    /// Préfixe R2 sous lequel publier les anomalies (`<prefix>/YYYY-MM-DD.om`).
+    /// Préfixe R2 sous lequel publier les anomalies prévision (`<prefix>/YYYY-MM-DD.om`).
     #[arg(long)]
     r2_anomaly_prefix: String,
+    /// Nombre de jours récents (J-1..J-provisional_days) à combler avec ARPEGE
+    /// en attendant ERA5 (estimation provisoire). 0 pour désactiver.
+    #[arg(long, default_value_t = 5)]
+    provisional_days: i64,
+    /// Préfixe R2 pour les anomalies provisoires (ARPEGE sur jours récents).
+    /// Requis si `provisional_days > 0`.
+    #[arg(long, default_value = "anomaly/temperature_2m/provisional")]
+    r2_provisional_prefix: String,
     /// Si présent, n'uploade pas vers R2 (test local).
     #[arg(long)]
     skip_upload: bool,
@@ -80,20 +88,67 @@ async fn main() -> Result<()> {
     let mut written = 0u32;
     let mut skipped = 0u32;
     let mut failures = 0u32;
+    // Prévision : J+0 → J+days_ahead, depuis le run 00Z du jour.
     for offset in 0..=args.days_ahead {
         let day = today + Duration::days(offset);
-        match process_day(day, model_run, &om_client, &climato, &dst_grid, &args, r2.as_ref())
-            .await
+        match process_day(
+            day,
+            model_run,
+            &args.r2_anomaly_prefix,
+            &om_client,
+            &climato,
+            &dst_grid,
+            &args,
+            r2.as_ref(),
+        )
+        .await
         {
             Ok(ProcessOutcome::Written) => written += 1,
             Ok(ProcessOutcome::SkippedPartial) => {
                 tracing::info!(%day, "skipped — moins de 24h dispo (au-delà de l'horizon du run)");
                 skipped += 1;
+                // Purge un éventuel fichier périmé pour ce jour (écrit par un
+                // run antérieur, potentiellement partiel) : sinon il reste dans
+                // valid_times avec une valeur biaisée.
+                if let Some(r2) = r2.as_ref() {
+                    let key = format!(
+                        "{}/{day}.om",
+                        args.r2_anomaly_prefix.trim_end_matches('/')
+                    );
+                    let _ = r2.delete(&key).await;
+                }
             }
             Err(e) => {
                 tracing::error!(?day, error = %e, "forecast day failed");
                 failures += 1;
             }
+        }
+    }
+
+    // Provisoire : J-1 → J-provisional_days, depuis le run 00Z de CHAQUE jour
+    // (qui couvre ce jour de 00h à 23h). Comble le trou ERA5T en attendant la
+    // réanalyse définitive. Écrit dans un préfixe séparé `provisional/`.
+    let mut provisional = 0u32;
+    for offset in 1..=args.provisional_days {
+        let day = today - Duration::days(offset);
+        let day_00z = day.and_hms_opt(0, 0, 0).expect("valid hms").and_utc();
+        match process_day(
+            day,
+            day_00z,
+            &args.r2_provisional_prefix,
+            &om_client,
+            &climato,
+            &dst_grid,
+            &args,
+            r2.as_ref(),
+        )
+        .await
+        {
+            Ok(ProcessOutcome::Written) => provisional += 1,
+            Ok(ProcessOutcome::SkippedPartial) => {
+                tracing::info!(%day, "provisional skipped — <24h (run pas/plus dispo)");
+            }
+            Err(e) => tracing::warn!(?day, error = %e, "provisional day failed"),
         }
     }
 
@@ -103,24 +158,28 @@ async fn main() -> Result<()> {
         // annoncé dans `valid_times` puis routé par le client vers `observed/`
         // (où il n'existe pas) → 404. Les jours passés doivent venir de
         // l'observed (ERA5/ERA5T), pas d'une vieille prévision.
-        gc_past_forecast(r2, &args.r2_anomaly_prefix, today).await;
+        gc_before(r2, &args.r2_anomaly_prefix, today, "forecast").await;
+        // Provisoire : on ne garde que la fenêtre J-1..J-provisional_days ;
+        // au-delà, ERA5 a (normalement) pris le relais côté observed.
+        let provisional_cutoff = today - Duration::days(args.provisional_days);
+        gc_before(r2, &args.r2_provisional_prefix, provisional_cutoff, "provisional").await;
 
         if let Err(e) = pipeline_core::anomaly_metadata::update_anomaly_metadata(r2).await {
             tracing::error!(error = %e, "failed to update anomaly metadata");
         }
     }
 
-    tracing::info!(written, skipped, failures, "forecast run done");
+    tracing::info!(written, skipped, provisional, failures, "forecast run done");
     Ok(())
 }
 
-/// Supprime les OMfiles forecast dont la date est antérieure à `today`.
-async fn gc_past_forecast(r2: &R2Client, prefix: &str, today: NaiveDate) {
+/// Supprime les OMfiles d'un préfixe dont la date est antérieure à `cutoff`.
+async fn gc_before(r2: &R2Client, prefix: &str, cutoff: NaiveDate, label: &str) {
     let prefix = format!("{}/", prefix.trim_end_matches('/'));
     let keys = match r2.list_prefix(&prefix).await {
         Ok(k) => k,
         Err(e) => {
-            tracing::error!(error = %e, "forecast GC: list failed");
+            tracing::error!(error = %e, %label, "GC: list failed");
             return;
         }
     };
@@ -128,11 +187,11 @@ async fn gc_past_forecast(r2: &R2Client, prefix: &str, today: NaiveDate) {
         let Some(date) = pipeline_core::anomaly_metadata::parse_date_from_key(&key) else {
             continue;
         };
-        if date < today {
+        if date < cutoff {
             if let Err(e) = r2.delete(&key).await {
-                tracing::warn!(key, error = %e, "forecast GC: delete failed");
+                tracing::warn!(key, error = %e, %label, "GC: delete failed");
             } else {
-                tracing::info!(key, "forecast GC: deleted past-date file");
+                tracing::info!(key, %label, "GC: deleted out-of-window file");
             }
         }
     }
@@ -150,6 +209,7 @@ enum ProcessOutcome {
 async fn process_day(
     day: NaiveDate,
     model_run: DateTime<Utc>,
+    target_prefix: &str,
     om: &OpenMeteoClient,
     climato: &ClimatologyCache,
     dst_grid: &ArpegeEuropeGrid,
@@ -211,11 +271,7 @@ async fn process_day(
     write_spatial_omfile(&local_path, &anomaly, dst_grid, &meta)?;
 
     if let Some(r2) = r2 {
-        let key = format!(
-            "{}/{}",
-            args.r2_anomaly_prefix.trim_end_matches('/'),
-            filename
-        );
+        let key = format!("{}/{}", target_prefix.trim_end_matches('/'), filename);
         r2.upload_file(&key, &local_path, pipeline_core::r2::CACHE_ROLLING)
             .await?;
     }

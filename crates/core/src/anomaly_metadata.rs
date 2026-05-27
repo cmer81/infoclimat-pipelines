@@ -17,6 +17,11 @@ pub struct DomainMetadataJson {
     pub reference_time: String,
     pub valid_times: Vec<String>,
     pub variables: Vec<String>,
+    /// Dates servies depuis le préfixe `provisional/` (estimation ARPEGE en
+    /// attendant ERA5), PAS encore couvertes par l'observé définitif. Le client
+    /// les affiche en opacité réduite et les fetch depuis `provisional/`.
+    #[serde(default)]
+    pub provisional_times: Vec<String>,
 }
 
 /// Extrait la date d'une clé R2 du type
@@ -28,11 +33,21 @@ pub fn parse_date_from_key(key: &str) -> Option<NaiveDate> {
 
 /// Union triée (croissante) des dates observed + forecast, au format ISO Z.
 pub fn build_valid_times(observed_keys: &[String], forecast_keys: &[String]) -> Vec<String> {
-    let mut dates: Vec<NaiveDate> = observed_keys
+    let dates: Vec<NaiveDate> = observed_keys
         .iter()
         .chain(forecast_keys.iter())
         .filter_map(|k| parse_date_from_key(k))
         .collect();
+    dates_to_iso(dates)
+}
+
+/// Préfixes R2 sous lesquels vivent les OMfiles d'anomalie.
+const OBSERVED_PREFIX: &str = "anomaly/temperature_2m/observed/";
+const FORECAST_PREFIX: &str = "anomaly/temperature_2m/forecast/";
+const PROVISIONAL_PREFIX: &str = "anomaly/temperature_2m/provisional/";
+
+/// Convertit des dates en `valid_times` ISO Z, triées croissantes et dédupliquées.
+fn dates_to_iso(mut dates: Vec<NaiveDate>) -> Vec<String> {
     dates.sort_unstable();
     dates.dedup();
     dates
@@ -40,10 +55,6 @@ pub fn build_valid_times(observed_keys: &[String], forecast_keys: &[String]) -> 
         .map(|d| format!("{}T00:00:00Z", d.format("%Y-%m-%d")))
         .collect()
 }
-
-/// Préfixes R2 sous lesquels vivent les OMfiles d'anomalie.
-const OBSERVED_PREFIX: &str = "anomaly/temperature_2m/observed/";
-const FORECAST_PREFIX: &str = "anomaly/temperature_2m/forecast/";
 /// Préfixe de métadonnées (layout `data_spatial` attendu par le client maps).
 const META_DOMAIN_PREFIX: &str = "data_spatial/anomaly_europe";
 
@@ -61,12 +72,41 @@ pub async fn update_anomaly_metadata(r2: &R2Client) -> Result<()> {
         .list_prefix(FORECAST_PREFIX)
         .await
         .context("listing forecast keys")?;
+    let provisional_keys = r2
+        .list_prefix(PROVISIONAL_PREFIX)
+        .await
+        .context("listing provisional keys")?;
 
-    let valid_times = build_valid_times(&observed_keys, &forecast_keys);
+    let observed_dates: std::collections::BTreeSet<NaiveDate> = observed_keys
+        .iter()
+        .filter_map(|k| parse_date_from_key(k))
+        .collect();
+    let provisional_dates: Vec<NaiveDate> = provisional_keys
+        .iter()
+        .filter_map(|k| parse_date_from_key(k))
+        .collect();
+
+    // valid_times = union observed ∪ forecast ∪ provisional.
+    let all_dates: Vec<NaiveDate> = observed_keys
+        .iter()
+        .chain(forecast_keys.iter())
+        .chain(provisional_keys.iter())
+        .filter_map(|k| parse_date_from_key(k))
+        .collect();
+    let valid_times = dates_to_iso(all_dates);
     if valid_times.is_empty() {
         tracing::warn!("no anomaly OMfiles found — skipping metadata write");
         return Ok(());
     }
+
+    // provisional_times = dates provisoires NON encore couvertes par l'observé
+    // définitif (l'observé gagne toujours).
+    let provisional_times = dates_to_iso(
+        provisional_dates
+            .into_iter()
+            .filter(|d| !observed_dates.contains(d))
+            .collect(),
+    );
 
     // reference_time synthétique = aujourd'hui 00:00Z.
     let today = chrono::Utc::now().date_naive();
@@ -88,6 +128,7 @@ pub async fn update_anomaly_metadata(r2: &R2Client) -> Result<()> {
         reference_time: reference_time.clone(),
         valid_times,
         variables: vec!["temperature_2m_anomaly".to_string()],
+        provisional_times,
     };
     let json = serde_json::to_vec(&meta).context("serializing metadata")?;
 
@@ -172,10 +213,12 @@ mod tests {
             reference_time: "2026-05-26T00:00:00Z".to_string(),
             valid_times: vec!["2026-05-26T00:00:00Z".to_string()],
             variables: vec!["temperature_2m_anomaly".to_string()],
+            provisional_times: vec!["2026-05-24T00:00:00Z".to_string()],
         };
         let json = serde_json::to_value(&meta).unwrap();
         assert_eq!(json["reference_time"], "2026-05-26T00:00:00Z");
         assert_eq!(json["valid_times"][0], "2026-05-26T00:00:00Z");
         assert_eq!(json["variables"][0], "temperature_2m_anomaly");
+        assert_eq!(json["provisional_times"][0], "2026-05-24T00:00:00Z");
     }
 }
