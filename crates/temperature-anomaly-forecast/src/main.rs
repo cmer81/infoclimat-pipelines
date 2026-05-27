@@ -93,6 +93,13 @@ async fn main() -> Result<()> {
     }
 
     if let Some(r2) = &r2 {
+        // GC : supprimer les fichiers forecast dont la date est passée. Sinon le
+        // J+0 d'hier reste dans `forecast/` et, devenu une date passée, il est
+        // annoncé dans `valid_times` puis routé par le client vers `observed/`
+        // (où il n'existe pas) → 404. Les jours passés doivent venir de
+        // l'observed (ERA5/ERA5T), pas d'une vieille prévision.
+        gc_past_forecast(r2, &args.r2_anomaly_prefix, today).await;
+
         if let Err(e) = pipeline_core::anomaly_metadata::update_anomaly_metadata(r2).await {
             tracing::error!(error = %e, "failed to update anomaly metadata");
         }
@@ -100,6 +107,30 @@ async fn main() -> Result<()> {
 
     tracing::info!(written, failures, "forecast run done");
     Ok(())
+}
+
+/// Supprime les OMfiles forecast dont la date est antérieure à `today`.
+async fn gc_past_forecast(r2: &R2Client, prefix: &str, today: NaiveDate) {
+    let prefix = format!("{}/", prefix.trim_end_matches('/'));
+    let keys = match r2.list_prefix(&prefix).await {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!(error = %e, "forecast GC: list failed");
+            return;
+        }
+    };
+    for key in keys {
+        let Some(date) = pipeline_core::anomaly_metadata::parse_date_from_key(&key) else {
+            continue;
+        };
+        if date < today {
+            if let Err(e) = r2.delete(&key).await {
+                tracing::warn!(key, error = %e, "forecast GC: delete failed");
+            } else {
+                tracing::info!(key, "forecast GC: deleted past-date file");
+            }
+        }
+    }
 }
 
 async fn process_day(
