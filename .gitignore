@@ -9,3 +9,6 @@ climato/
 
 # logs de build/download (artefacts locaux)
 *.log
+
+# perso (permissions locales Claude Code)
+.claude/settings.local.json
