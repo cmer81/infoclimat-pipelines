@@ -1,6 +1,8 @@
 //! CLI `temperature-anomaly-observed` — calcule les anomalies journalières
-//! observées (ERA5/ERA5T) pour les `days_back` derniers jours, écrit les
-//! OMfiles spatiaux, les pousse sur R2, et GC les anciens fichiers du bucket.
+//! observées (ERA5/ERA5T) pour les `refresh_days` derniers jours, écrit les
+//! OMfiles spatiaux, les pousse sur R2, et GC les fichiers plus vieux que
+//! `days_back` (rétention). Les jours entre `refresh_days` et `days_back`
+//! persistent en R2 sans re-téléchargement.
 
 use std::path::{Path, PathBuf};
 
@@ -21,9 +23,17 @@ use temperature_anomaly_observed::cds;
     about = "Compute daily observed temperature anomalies (ERA5/ERA5T) and upload to R2"
 )]
 struct Args {
-    /// Nombre de jours en arrière à recalculer (J-1 .. J-days_back).
+    /// Fenêtre de rétention en jours (seuil GC + horizon des métadonnées).
+    /// Les fichiers plus anciens sont supprimés du bucket.
     #[arg(long, default_value_t = 30)]
     days_back: i64,
+    /// Nombre de jours récents à (re)télécharger à chaque run (J-1 .. J-refresh_days).
+    /// Plus petit que `days_back` : les jours plus anciens persistent déjà en R2
+    /// (téléchargés quand ils étaient récents) et ne sont pas re-téléchargés.
+    /// Couvre les nouveaux jours + les révisions ERA5T. Mettre `>= days_back`
+    /// pour un backfill initial complet.
+    #[arg(long, default_value_t = 7)]
+    refresh_days: i64,
     /// Dossier local contenant les 366 OMfiles climatologiques.
     #[arg(long)]
     climato_dir: PathBuf,
@@ -63,7 +73,7 @@ async fn main() -> Result<()> {
     let mut written = 0u32;
     let mut failures = 0u32;
 
-    for offset in 1..=args.days_back {
+    for offset in 1..=args.refresh_days {
         let day = today - Duration::days(offset);
         match process_day(day, &args, &climato, &dst_grid, r2.as_ref()).await {
             Ok(_) => written += 1,

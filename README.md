@@ -73,14 +73,19 @@ cargo run --release -p temperature-anomaly-climatology -- \
 
 Produit 366 fichiers dans `climato_out/`.
 
-### Observed 1 jour
+### Observed (test local)
+
+`--refresh-days` = nb de jours récents (re)téléchargés ; `--days-back` = rétention
+(seuil GC). En prod le cron utilise `--refresh-days 7 --days-back 30`. Pour un
+test rapide, ajouter `--skip-upload` (saute R2 + GC).
 
 ```bash
 cargo run --release -p temperature-anomaly-observed -- \
-  --days-back 1 \
+  --refresh-days 7 \
+  --days-back 30 \
   --climato-dir climato_out \
   --work-dir work \
-  --r2-anomaly-prefix anomaly/temperature_2m/test_observed \
+  --r2-anomaly-prefix anomaly/temperature_2m/observed \
   --download-script scripts/download_era5.py
 ```
 

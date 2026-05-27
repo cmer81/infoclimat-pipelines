@@ -50,6 +50,7 @@ jobs:
           mkdir -p work
           ./target/release/temperature-anomaly-observed \
             --days-back 30 \
+            --refresh-days 7 \
             --climato-dir climato \
             --work-dir work \
             --r2-anomaly-prefix anomaly/temperature_2m/observed \
