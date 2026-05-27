@@ -78,13 +78,18 @@ async fn main() -> Result<()> {
 
     let today = now.date_naive();
     let mut written = 0u32;
+    let mut skipped = 0u32;
     let mut failures = 0u32;
     for offset in 0..=args.days_ahead {
         let day = today + Duration::days(offset);
         match process_day(day, model_run, &om_client, &climato, &dst_grid, &args, r2.as_ref())
             .await
         {
-            Ok(_) => written += 1,
+            Ok(ProcessOutcome::Written) => written += 1,
+            Ok(ProcessOutcome::SkippedPartial) => {
+                tracing::info!(%day, "skipped — moins de 24h dispo (au-delà de l'horizon du run)");
+                skipped += 1;
+            }
             Err(e) => {
                 tracing::error!(?day, error = %e, "forecast day failed");
                 failures += 1;
@@ -105,7 +110,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    tracing::info!(written, failures, "forecast run done");
+    tracing::info!(written, skipped, failures, "forecast run done");
     Ok(())
 }
 
@@ -133,6 +138,15 @@ async fn gc_past_forecast(r2: &R2Client, prefix: &str, today: NaiveDate) {
     }
 }
 
+/// Issue du traitement d'un jour de prévision.
+enum ProcessOutcome {
+    /// Anomalie calculée sur 24h pleines et (éventuellement) uploadée.
+    Written,
+    /// Jour incomplet (< 24h dispo, au-delà de l'horizon du run) — sauté pour
+    /// ne pas publier une moyenne journalière partielle (biaisée).
+    SkippedPartial,
+}
+
 async fn process_day(
     day: NaiveDate,
     model_run: DateTime<Utc>,
@@ -141,9 +155,13 @@ async fn process_day(
     dst_grid: &ArpegeEuropeGrid,
     args: &Args,
     r2: Option<&R2Client>,
-) -> Result<()> {
+) -> Result<ProcessOutcome> {
     let hours = om.fetch_day(day, model_run).await?;
-    anyhow::ensure!(!hours.is_empty(), "no hours available for {day}");
+    // On exige les 24 heures : une moyenne journalière sur un sous-ensemble
+    // (ex. J+0 démarrant à 06Z, ou J+4 au-delà de l'horizon) est biaisée.
+    if hours.len() < 24 {
+        return Ok(ProcessOutcome::SkippedPartial);
+    }
 
     let mut acc = Array2::<f32>::zeros((dst_grid.ny(), dst_grid.nx()));
     let mut counts = Array2::<u32>::zeros((dst_grid.ny(), dst_grid.nx()));
@@ -201,7 +219,7 @@ async fn process_day(
         r2.upload_file(&key, &local_path, pipeline_core::r2::CACHE_ROLLING)
             .await?;
     }
-    Ok(())
+    Ok(ProcessOutcome::Written)
 }
 
 /// Décode un OMfile spatial Open-Meteo (variable `temperature_2m`) fourni

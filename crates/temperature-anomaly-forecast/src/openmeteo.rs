@@ -18,6 +18,8 @@ use reqwest::Client;
 const BASE_URL_ENV: &str = "OPENMETEO_BASE_URL";
 const DEFAULT_BASE: &str = "https://map-tiles.open-meteo.com";
 const DOMAIN: &str = "meteofrance_arpege_europe";
+/// Délai (heures) après lequel le run 00Z est supposé publié sur Open-Meteo.
+const RUN_PUBLISH_DELAY_H: i64 = 6;
 
 pub struct OpenMeteoClient {
     http: Client,
@@ -38,21 +40,28 @@ impl OpenMeteoClient {
 
     /// Sélectionne le run le plus récent supposément publié.
     ///
-    /// Les fichiers ARPEGE arrivent sur Open-Meteo plusieurs heures après
-    /// l'heure du run. On applique donc une marge de sécurité : on prend
-    /// `now - 6h`, puis on l'arrondit à la borne 6h inférieure.
+    /// On utilise impérativement un run **00Z** : il couvre le jour J+0 de 00h
+    /// à 23h, donc la moyenne journalière est calculée sur les 24 heures. Un
+    /// run 06/12/18Z raterait les premières heures du jour (les plus froides)
+    /// → moyenne biaisée chaud → anomalie faussement positive.
     ///
-    /// Exemples (cf. plan & tests) :
-    /// - 07:30 UTC → 00Z (6:30 − 6h = 01:30 → floor=00).
-    /// - 13:05 UTC → 06Z (12:05 + 1 − 6h = 07:05 → floor=06).
+    /// Le run 00Z du jour est publié ~6 h après 00Z. Avant ça, on retombe sur
+    /// le run 00Z de la veille (qui couvre quand même tout J+0).
+    ///
+    /// Exemples :
+    /// - 07:30 UTC → aujourd'hui 00Z (publié).
+    /// - 03:00 UTC → hier 00Z (le 00Z d'aujourd'hui pas encore publié).
     pub fn latest_model_run(now: DateTime<Utc>) -> DateTime<Utc> {
-        let shifted = now - Duration::hours(6);
-        let floored_hour = (shifted.hour() / 6) * 6;
-        shifted
+        let today_00z = now
             .date_naive()
-            .and_hms_opt(floored_hour, 0, 0)
+            .and_hms_opt(0, 0, 0)
             .expect("valid hms")
-            .and_utc()
+            .and_utc();
+        if now >= today_00z + Duration::hours(RUN_PUBLISH_DELAY_H) {
+            today_00z
+        } else {
+            today_00z - Duration::days(1)
+        }
     }
 
     /// URL d'un OMfile horaire ARPEGE Europe pour `time` à partir du `model_run`.
@@ -138,10 +147,10 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn latest_run_at_midnight_local_returns_previous_day_18z() {
-        // 00:00 UTC : shifted = J-1 18:00 → 18Z J-1.
+    fn latest_run_at_midnight_returns_previous_day_00z() {
+        // 00:00 UTC : le 00Z du jour n'est pas encore publié (< 06Z) → 00Z J-1.
         let now = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
         let run = OpenMeteoClient::latest_model_run(now);
-        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 25, 18, 0, 0).unwrap());
+        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 25, 0, 0, 0).unwrap());
     }
 }
