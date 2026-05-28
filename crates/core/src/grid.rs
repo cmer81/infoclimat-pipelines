@@ -70,6 +70,43 @@ impl Grid for ArpegeEuropeGrid {
     }
 }
 
+/// Grille AROME-OM Réunion (modèle Météo-France, Outre-Mer Océan Indien).
+///
+/// Lat/lon régulière. Les valeurs définitives proviennent du header GRIB2 d'un
+/// fichier réel (cf. `docs/superpowers/specs/2026-05-28-arome-om-forecast-design.md`,
+/// section "Inconnues à lever dès la première PR"). Pour l'instant ce sont des
+/// PLACEHOLDERS estimés — à remplacer dès que Task 0 (probe API) sera exécutée.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReunionGrid;
+
+impl Grid for ReunionGrid {
+    // TODO(task-0): remplacer ces 8 valeurs par celles lues sur grib_dump.
+    fn nx(&self) -> usize {
+        201
+    }
+    fn ny(&self) -> usize {
+        161
+    }
+    fn lon_min(&self) -> f64 {
+        53.0
+    }
+    fn lon_max(&self) -> f64 {
+        58.0
+    }
+    fn lat_min(&self) -> f64 {
+        -23.0
+    }
+    fn lat_max(&self) -> f64 {
+        -19.0
+    }
+    fn dx(&self) -> f64 {
+        0.025
+    }
+    fn dy(&self) -> f64 {
+        0.025
+    }
+}
+
 /// Bbox utilisée pour télécharger ERA5. Couvre la grille ARPEGE Europe
 /// avec ~1° de marge pour permettre une interpolation bilinéaire correcte
 /// jusqu'aux bords.
@@ -87,3 +124,37 @@ pub const EUROPE_DOWNLOAD_BBOX: Bbox = Bbox {
     lat_min: 19.0,
     lat_max: 73.0,
 };
+
+#[cfg(test)]
+mod reunion_tests {
+    use super::*;
+
+    #[test]
+    fn reunion_grid_has_expected_dimensions() {
+        let g = ReunionGrid;
+        // Placeholder values — TODO(task-0): replace after probing the real GRIB header.
+        assert_eq!(g.nx(), 201);
+        assert_eq!(g.ny(), 161);
+        assert!((g.dx() - 0.025).abs() < 1e-9);
+        assert!((g.dy() - 0.025).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reunion_grid_corner_roundtrip() {
+        let g = ReunionGrid;
+        let (i, j) = g.lonlat_to_indices(g.lon_min(), g.lat_min()).unwrap();
+        assert_eq!((i, j), (0, 0));
+        let (lon, lat) = g.indices_to_lonlat(0, 0);
+        assert!((lon - g.lon_min()).abs() < 1e-9);
+        assert!((lat - g.lat_min()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reunion_grid_rejects_outside_bbox() {
+        let g = ReunionGrid;
+        // Méditerranée — way outside.
+        assert!(g.lonlat_to_indices(0.0, 0.0).is_none());
+        // Around Saint-Denis (Réunion). Should be inside.
+        assert!(g.lonlat_to_indices(55.5, -21.1).is_some());
+    }
+}
