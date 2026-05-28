@@ -51,17 +51,26 @@ impl fmt::Display for TimeWindow {
 }
 
 /// Construit le plan de download pour un run donné : produit cartésien
-/// `packages × windows`, où les windows couvrent `[0, horizon_h)` par
-/// tranches de 6 h pleines.
+/// `packages × windows`, où les windows couvrent l'horizon par tranches de
+/// 6 h alignées sur le format Météo-France.
 ///
-/// Si `horizon_h` n'est pas multiple de 6, la fraction restante est ignorée :
-/// l'API attend des fenêtres de 6h exactes (ex. `00H06H`, `07H12H`, ...). Le
-/// caller peut bumper l'horizon pour obtenir une couverture plus large.
+/// Format API : la 1re fenêtre est `00H06H` (couvre les leadtimes 0..=6),
+/// les suivantes sont 1-indexed : `07H12H`, `13H18H`, `19H24H`, … . Donc
+/// la séquence d'instants de départ est `[0, 7, 13, 19, 25, 31, 37, ...]`
+/// (i.e. `+7` puis `+6` ensuite), pas `[0, 6, 12, 18, ...]`.
+///
+/// TODO(task-0): confirmer ce format contre l'API réelle. Le code actuel
+/// suit l'évidence trouvée dans la doc Météo-France (article externe + page
+/// Confluence) au moment du design.
 pub fn build_plan(horizon_h: u32, packages: &[Package]) -> Vec<(Package, TimeWindow)> {
     let mut windows = Vec::new();
-    let mut start = 0u32;
-    while start + 6 <= horizon_h {
-        windows.push(TimeWindow::new(start, start + 6));
+    if horizon_h >= 6 {
+        windows.push(TimeWindow::new(0, 6));
+    }
+    // Les fenêtres suivantes sont `(7,12)`, `(13,18)`, … : start avance de 6.
+    let mut start = 7u32;
+    while start + 5 <= horizon_h {
+        windows.push(TimeWindow::new(start, start + 5));
         start += 6;
     }
     let mut plan = Vec::with_capacity(windows.len() * packages.len());
@@ -104,14 +113,17 @@ mod tests {
     }
 
     #[test]
-    fn build_plan_windows_are_contiguous_and_six_hours() {
+    fn build_plan_windows_follow_meteofrance_1_indexed_format() {
         let plan = build_plan(42, &[Package::Sp1]);
         let windows: Vec<TimeWindow> = plan.iter().map(|(_, w)| *w).collect();
+        assert_eq!(windows.len(), 7);
         assert_eq!(windows[0], TimeWindow::new(0, 6));
-        assert_eq!(windows[1], TimeWindow::new(6, 12));
-        assert_eq!(windows.last().copied(), Some(TimeWindow::new(36, 42)));
+        assert_eq!(windows[1], TimeWindow::new(7, 12));
+        assert_eq!(windows[2], TimeWindow::new(13, 18));
+        assert_eq!(windows[6], TimeWindow::new(37, 42));
+        // start[N+1] = end[N] + 1 pour N >= 0 (sauf gap entre window 0 et 1 qui est aussi +1)
         for pair in windows.windows(2) {
-            assert_eq!(pair[0].end_h, pair[1].start_h);
+            assert_eq!(pair[1].start_h, pair[0].end_h + 1);
         }
     }
 

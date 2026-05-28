@@ -282,7 +282,7 @@ async fn gc_old_runs(
         let Some(hhmm) = hhmmz.strip_suffix('Z') else { continue };
         let Ok(hh) = hhmm.get(..2).unwrap_or("").parse::<u32>() else { continue };
         let Some(date) = chrono::NaiveDate::from_ymd_opt(y, m, d) else { continue };
-        let run_dt = date.and_hms_opt(hh, 0, 0).expect("valid hms").and_utc();
+        let Some(run_dt) = date.and_hms_opt(hh, 0, 0).map(|t| t.and_utc()) else { continue };
         if run_dt < cutoff {
             if let Err(e) = r2.delete(&k).await {
                 tracing::warn!(key=%k, error=%e, "GC delete failed");
