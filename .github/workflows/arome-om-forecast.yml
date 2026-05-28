@@ -1,0 +1,50 @@
+name: arome-om-forecast
+
+on:
+  schedule:
+    # Lance ~4h après chaque run AROME-OM (00/03/06/09/12/15/18/21Z).
+    # Si la cadence réelle est différente (Task 0), ajuster.
+    - cron: '0 4,7,10,13,16,19,22,1 * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MF_APPLICATION_ID: ${{ secrets.MF_APPLICATION_ID }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+      R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      RUST_LOG: info
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+
+      - name: Install eccodes (system)
+        run: sudo apt-get update && sudo apt-get install -y libeccodes0 libeccodes-tools
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install cfgrib + xarray
+        run: pip install cfgrib xarray netCDF4
+
+      - name: Build cargo binary (release)
+        run: cargo build --release -p arome-om-forecast
+
+      - name: Run arome-om-forecast pipeline
+        run: |
+          mkdir -p work
+          ./target/release/arome-om-forecast \
+            --territory reunion \
+            --packages SP1,SP2,SP3 \
+            --horizon-h 42 \
+            --work-dir work \
+            --r2-prefix data_spatial/arome_om_reunion
