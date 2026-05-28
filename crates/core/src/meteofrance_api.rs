@@ -93,6 +93,121 @@ pub fn backoff_seconds(attempt: u32) -> u64 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use chrono::Duration;
+use serde::Deserialize;
+use tokio::sync::RwLock;
+
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    /// Durée de validité en secondes fournie par le serveur.
+    expires_in: u64,
+}
+
+#[derive(Clone, Debug)]
+struct CachedToken {
+    token: String,
+    /// Instant absolu d'expiration (marge de sécurité incluse).
+    expires_at: DateTime<Utc>,
+}
+
+/// Marge avant l'expiration à partir de laquelle on rafraîchit proactivement.
+const TOKEN_REFRESH_MARGIN_S: i64 = 60;
+
+/// Gère l'authentification OAuth2 client-credentials sur le portail MF.
+///
+/// Le token est mis en cache dans un `RwLock` : plusieurs tâches tokio
+/// concurrentes partagent la même instance (via [`SharedAuth`]) et ne
+/// déclenchent qu'un seul refresh simultané.
+pub struct MeteoFranceAuth {
+    /// Identifiant applicatif long-lived (env `MF_APPLICATION_ID`).
+    application_id: String,
+    cached: RwLock<Option<CachedToken>>,
+    http: reqwest::Client,
+}
+
+impl MeteoFranceAuth {
+    /// Construit depuis l'environnement. Retourne une erreur si
+    /// `MF_APPLICATION_ID` est absent.
+    pub fn from_env() -> Result<Self, MeteoFranceError> {
+        let application_id = std::env::var("MF_APPLICATION_ID")
+            .map_err(|_| MeteoFranceError::Auth("MF_APPLICATION_ID missing".into()))?;
+        let http = reqwest::Client::builder()
+            .user_agent("infoclimat-pipelines/0.1")
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(MeteoFranceError::Transport)?;
+        Ok(Self {
+            application_id,
+            cached: RwLock::new(None),
+            http,
+        })
+    }
+
+    /// Retourne un bearer token valide.
+    ///
+    /// Fast path : lecture seule du cache si le token expire dans plus de
+    /// [`TOKEN_REFRESH_MARGIN_S`] secondes. Slow path : refresh via
+    /// [`Self::refresh_token`].
+    pub async fn get_token(&self) -> Result<String, MeteoFranceError> {
+        {
+            let guard = self.cached.read().await;
+            if let Some(c) = guard.as_ref() {
+                if c.expires_at > Utc::now() + Duration::seconds(TOKEN_REFRESH_MARGIN_S) {
+                    return Ok(c.token.clone());
+                }
+            }
+        }
+        self.refresh_token().await
+    }
+
+    /// Force un refresh immédiat, par exemple après un 401 inattendu sur un
+    /// token jugé valide (révocation côté serveur).
+    pub async fn force_refresh(&self) -> Result<String, MeteoFranceError> {
+        self.refresh_token().await
+    }
+
+    async fn refresh_token(&self) -> Result<String, MeteoFranceError> {
+        let resp = self
+            .http
+            .post(TOKEN_ENDPOINT)
+            .header("Authorization", format!("Basic {}", self.application_id))
+            .form(&[("grant_type", "client_credentials")])
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            // unwrap_or_default est acceptable : on veut juste un message
+            // d'erreur lisible, pas une propagation d'une seconde erreur.
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MeteoFranceError::Auth(format!(
+                "token endpoint {status}: {body}"
+            )));
+        }
+        let parsed: TokenResponse = resp.json().await?;
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "expires_in is always a small positive integer from an OAuth response"
+        )]
+        let expires_at = Utc::now() + Duration::seconds(parsed.expires_in as i64);
+        let mut guard = self.cached.write().await;
+        *guard = Some(CachedToken {
+            token: parsed.access_token.clone(),
+            expires_at,
+        });
+        Ok(parsed.access_token)
+    }
+}
+
+/// Wrapper `Arc` pour partager `MeteoFranceAuth` entre tâches tokio.
+pub type SharedAuth = Arc<MeteoFranceAuth>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
