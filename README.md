@@ -83,19 +83,61 @@ Fenêtres :
 - **forecast** : J+0→J+4 réécrits à chaque run ; GC des fichiers dont la date est
   passée (sinon un J+0 d'hier traîne et est mal routé par le client).
 
-### Pipeline `arome-om-forecast`
+### Pipeline `arome-om-forecast` (AROME-OM Réunion, prévision brute)
 
-En plus des deps déjà documentées :
+Publie sur R2 les OMfiles AROME-OM Réunion (prévision brute, ~12 variables surface,
+horizon 42 h). Consommé tel quel par le client `maps/` sous le domaine
+`arome_om_reunion`.
+
+#### Pré-requis
+
+- **Compte Météo-France API** : [portail-api.meteofrance.fr](https://portail-api.meteofrance.fr/) → créer une application, récupérer l'`application_id` long-lived → variable d'environnement `MF_APPLICATION_ID`.
+- **Système (Debian-likes)** :
+
+  ```bash
+  sudo apt install libeccodes0 libeccodes-tools
+  ```
+
+- **Python venv** :
+
+  ```bash
+  source venv/bin/activate
+  pip install cfgrib xarray netCDF4
+  ```
+
+  Le binaire appelle `python3` du PATH sur `scripts/decode_arome_om_grib.py` pour
+  décoder le GRIB2 ; le venv doit donc être activé avant de lancer le binaire.
+
+- Bucket R2 déjà configuré (cf. autres pipelines).
+
+#### Lancement local
 
 ```bash
-# Système (Debian-likes)
-sudo apt install libeccodes0 libeccodes-tools
-
-# Python (venv projet)
-pip install cfgrib xarray netCDF4
+source venv/bin/activate
+cargo run --release -p arome-om-forecast -- \
+  --territory reunion \
+  --packages SP1,SP2,SP3 \
+  --horizon-h 42 \
+  --work-dir work \
+  --skip-upload
 ```
 
-Le binaire appelle `python3` du PATH (typiquement via `source venv/bin/activate`) sur `scripts/decode_arome_om_grib.py` pour décoder le GRIB2.
+`--skip-upload` produit les OMfiles localement sans toucher R2.
+
+#### Cron production
+
+`.github/workflows/arome-om-forecast.yml`, ~8 runs/jour alignés sur la publication
+AROME-OM (nouveau run disponible ~2 h après l'heure du run modèle).
+
+#### Secrets GitHub Actions requis
+
+| Secret | Description |
+|---|---|
+| `MF_APPLICATION_ID` | ID application Météo-France API (long-lived) |
+| `R2_ACCOUNT_ID` | Partagé avec les autres pipelines |
+| `R2_ACCESS_KEY` | Partagé avec les autres pipelines |
+| `R2_SECRET_KEY` | Partagé avec les autres pipelines |
+| `R2_BUCKET` | Partagé avec les autres pipelines |
 
 ---
 
@@ -109,15 +151,19 @@ infoclimat-pipelines/
 │   │                                         #   r2, climatology, anomaly_metadata, logging
 │   ├── temperature-anomaly-climatology/      # CLI one-shot (lit NetCDF ERA5)
 │   ├── temperature-anomaly-observed/         # CLI cron quotidien (CDS jour par jour)
-│   └── temperature-anomaly-forecast/         # CLI cron 4×/jour (Open-Meteo)
+│   ├── temperature-anomaly-forecast/         # CLI cron 4×/jour (Open-Meteo)
+│   └── arome-om-forecast/                   # CLI cron ~8×/jour (AROME-OM Réunion, MF API)
 ├── scripts/
 │   ├── download_era5.py                      # client cdsapi (CDS Copernicus)
+│   ├── decode_arome_om_grib.py               # décodeur GRIB2 AROME-OM (cfgrib)
 │   ├── build_climatology.sh                  # build climato 30 ans (download + build)
 │   └── requirements.txt
 └── .github/workflows/
+    ├── ci.yml                                # gate PR : clippy + tests
     ├── temperature-anomaly-climatology.yml   # workflow_dispatch
-    ├── temperature-anomaly-observed.yml       # cron quotidien
-    └── temperature-anomaly-forecast.yml       # cron 4×/jour
+    ├── temperature-anomaly-observed.yml      # cron quotidien
+    ├── temperature-anomaly-forecast.yml      # cron 4×/jour
+    └── arome-om-forecast.yml                 # cron ~8×/jour
 ```
 
 ---
@@ -192,7 +238,8 @@ Ajouter `--skip-upload` pour tester sans écrire dans R2.
 Crons automatiques une fois les **secrets** configurés sur le repo
 (Settings → Secrets and variables → Actions) :
 
-- `CDS_API_KEY` — clé Copernicus CDS ([cds.climate.copernicus.eu](https://cds.climate.copernicus.eu/)).
+- `CDS_API_KEY` — clé Copernicus CDS ([cds.climate.copernicus.eu](https://cds.climate.copernicus.eu/)). Utilisé par `temperature-anomaly-observed`.
+- `MF_APPLICATION_ID` — ID application Météo-France API long-lived ([portail-api.meteofrance.fr](https://portail-api.meteofrance.fr/)). Utilisé par `arome-om-forecast`.
 - `R2_ACCOUNT_ID` — ID compte Cloudflare.
 - `R2_ACCESS_KEY` / `R2_SECRET_KEY` — token R2 read+write (le secret fait **64 hex**).
 - `R2_BUCKET` — `infoclimat-modeles-data`.
