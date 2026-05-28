@@ -304,12 +304,31 @@ Le code est délibérément structuré pour rendre testable **sans réseau** : U
 - `python3` du PATH avec `cfgrib`, `xarray`, `netCDF4` installés (extension du `venv` projet déjà utilisé pour CDS). `eccodes` système requis (`apt install libeccodes0` sur Debian-likes).
 - Bucket R2 existant (déjà configuré pour temperature-anomaly), nouveau préfixe `data_spatial/arome_om_reunion/`.
 
-## Inconnues à lever dès la première PR
+## Valeurs résolues à Task 0 (probe API du 2026-05-28)
 
-1. URL exacte AROME-OM (`DPPaquetAROME-OM` vs `DPPaquetAROME/models/AROME-OM-INDIEN` ou similaire).
-2. Dimensions exactes de la grille AROME-OM Réunion (à lire dans le header GRIB2 du premier fichier reçu).
-3. Cadence runs réelle (4×/j ou 8×/j) — détermine la fréquence du cron GH Actions.
-4. Horizon réel (42h, 48h, 78h ?) — fixe la valeur par défaut de `--horizon-h`.
-5. Latence de publication réelle — fixe `publication_delay` dans `floor_3h(now - publication_delay)`.
+Les 5 inconnues sont maintenant levées. Plusieurs surprises significatives par rapport aux hypothèses initiales :
 
-Ces 5 points sont délibérément non-bloquants pour le design — ils se calent à l'implémentation et n'invalident aucune décision structurelle ci-dessus.
+| # | Hypothèse initiale | Valeur réelle | Impact |
+|---|---|---|---|
+| 1 | Namespace `DPPaquetAROME-OM` | ✅ confirmé | aucun |
+| 1 | Endpoint produit `productARO` | ❌ **`productOMOI`** | renomme l'URL builder + appels |
+| 1 | Model id `AROME-INDIEN` | ❌ **`AROME-OM-INDIEN`** | placeholder à corriger |
+| 1 | Format `time` = fenêtres 6h (`00H06H`) | ❌ **Leadtimes 1h (`001H`, `002H`, … `048H`)** | refacto `TimeWindow` → `Leadtime` |
+| 2 | Grille ~201×161, lon 53-58, lat -23 à -19 | ❌ **1395×899, lon 32.75-67.6, lat -25.9 à -3.45** | grille 40× plus grande (océan Indien entier) |
+| 3 | Cadence 4×/j ou 8×/j | ✅ **4×/j (00/06/12/18 UTC)** | cron CI ajusté |
+| 4 | Horizon 42-78h | ✅ **48h** (000H à 048H inclus) | default `--horizon-h = 48` |
+| 5 | Latence publication 3-4h | ❌ **~6h** (run 06Z → premier fichier 12:27Z) | `PUBLICATION_DELAY_H = 6`, `floor_6h(now - delay)` |
+
+**Conséquence sur la grille :** « ReunionGrid » est un nom trompeur — la grille AROME-OM Océan Indien couvre **Réunion + Mayotte + grand morceau d'océan Indien** (Madagascar, sud de l'Inde, côte est-africaine). Le nom interne reste `ReunionGrid` (user-facing produit), la doc-comment du type explique le périmètre réel.
+
+**Inventaire variables SP1/SP2/SP3 réel** (`grib_ls` sur fichiers 001H du run 2026-05-28T06:00Z) :
+
+- **SP1** (15 messages) : `10wdir, 10si, max_i10fg, prmsl, 10u, 10v, max_10efg, max_10nfg, 2t, 2r, tp, unknown, tsnowp, ssrd, tgrp`
+- **SP2** (12 messages) : `2d, 2sh, sp, t (surface), lcc, hcc, mcc, CAPE_INS, blh, tirf, min_2t, max_2t`
+- **SP3** (13 messages) : `slhf, sshf, strd, ssr, str, ssrc, strc, iews, inss` (+ 4 `unknown`)
+
+Le registry MVP retenu (12 vars) :
+- SP1 (8) : `2t, 2r, 10u, 10v, 10si, max_i10fg, prmsl, tp`
+- SP2 (4) : `2d, lcc, mcc, hcc`
+
+(Pas de SP3 au MVP : flux énergétiques peu pertinents pour une carte grand public ; à ajouter au cas par cas si demande utilisateur.)
