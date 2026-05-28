@@ -1,9 +1,10 @@
-//! Définition de la grille ARPEGE Europe (la grille native publiée par
-//! Open-Meteo pour le domaine `meteofrance_arpege_europe`).
+//! Définition des grilles de prévision utilisées dans les pipelines.
 //!
-//! Dimensions : 521 lignes (latitude) × 741 colonnes (longitude) à 0.1°.
-//! Origine au coin sud-ouest : (lat 20.0°, lon -32.0°). Coin nord-est :
-//! (lat 72.0°, lon 42.0°).
+//! Grilles disponibles :
+//! - [`ArpegeEuropeGrid`] — ARPEGE Europe (Open-Meteo, 521×741, 0.1°), origine
+//!   SW (lat 20°, lon -32°), coin NE (lat 72°, lon 42°).
+//! - [`ReunionGrid`] — AROME-OM Réunion (Météo-France, valeurs provisoires
+//!   jusqu'à exécution de Task 0).
 
 pub trait Grid {
     fn nx(&self) -> usize;
@@ -133,10 +134,16 @@ mod reunion_tests {
     fn reunion_grid_has_expected_dimensions() {
         let g = ReunionGrid;
         // Placeholder values — TODO(task-0): replace after probing the real GRIB header.
+        // Tester chaque constante explicitement : un search-replace partiel à Task 0
+        // doit échouer ici, pas silencieusement.
         assert_eq!(g.nx(), 201);
         assert_eq!(g.ny(), 161);
         assert!((g.dx() - 0.025).abs() < 1e-9);
         assert!((g.dy() - 0.025).abs() < 1e-9);
+        assert!((g.lon_min() - 53.0).abs() < 1e-9);
+        assert!((g.lon_max() - 58.0).abs() < 1e-9);
+        assert!((g.lat_min() - (-23.0)).abs() < 1e-9);
+        assert!((g.lat_max() - (-19.0)).abs() < 1e-9);
     }
 
     #[test]
