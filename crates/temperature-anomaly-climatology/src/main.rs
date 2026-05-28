@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use clap::Parser;
 use pipeline_core::grid::{ArpegeEuropeGrid, Bbox};
-use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
+use pipeline_core::omfile_io::{ANOMALY_VARIABLE, OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
 use pipeline_core::regrid::bilinear_regrid;
 
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
                 "grid": "arpege_europe",
             }),
         };
-        write_spatial_omfile(&local_path, arr, &dst_grid, &meta)
+        write_spatial_omfile(&local_path, ANOMALY_VARIABLE, arr, &dst_grid, &meta)
             .with_context(|| format!("write DOY {doy}"))?;
         if let Some(r2) = &r2 {
             let key = format!("{}/{}", args.r2_prefix.trim_end_matches('/'), filename);

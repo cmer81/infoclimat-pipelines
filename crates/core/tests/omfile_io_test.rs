@@ -17,8 +17,8 @@ fn omfile_roundtrip_preserves_data() {
         extra: serde_json::json!({"key": "value"}),
     };
 
-    write_spatial_omfile(tmp.path(), &arr, &dst, &meta).unwrap();
-    let (read_arr, read_meta) = read_spatial_omfile(tmp.path()).unwrap();
+    write_spatial_omfile(tmp.path(), "temperature_2m_anomaly", &arr, &dst, &meta).unwrap();
+    let (read_arr, read_meta) = read_spatial_omfile(tmp.path(), "temperature_2m_anomaly").unwrap();
 
     assert_eq!(read_arr.shape(), arr.shape());
     for ((j, i), &v) in arr.indexed_iter() {

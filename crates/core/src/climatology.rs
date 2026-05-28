@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate};
 use ndarray::Array2;
 
-use crate::omfile_io::read_spatial_omfile;
+use crate::omfile_io::{ANOMALY_VARIABLE, read_spatial_omfile};
 
 /// Index 1..=366 (DOY 1 = 1er janvier ; pour les non-bissextiles le DOY 366
 /// n'existe pas, mais on garde 366 emplacements pour simplifier l'indexation).
@@ -31,7 +31,7 @@ impl ClimatologyCache {
                 continue;
             }
             let (arr, _meta) =
-                read_spatial_omfile(&path).with_context(|| format!("reading {path:?}"))?;
+                read_spatial_omfile(&path, ANOMALY_VARIABLE).with_context(|| format!("reading {path:?}"))?;
             by_doy.insert(doy, arr);
         }
         Ok(Self { by_doy })

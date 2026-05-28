@@ -29,6 +29,8 @@ use arome_om_forecast::planning::{Package, build_plan};
 use arome_om_forecast::variables::{VARIABLES, VariableEntry, variables_for_package};
 
 const PUBLICATION_DELAY_H: i64 = 6;
+/// Cadence des runs AROME-OM : 00/06/12/18 UTC → un run toutes les 6 heures.
+const RUN_INTERVAL_H: i64 = 6;
 
 #[derive(Debug, Parser)]
 #[command(about = "Compute AROME-OM forecast OMfiles (raw values) and upload to R2")]
@@ -60,6 +62,11 @@ struct Args {
     /// Si présent, n'uploade pas vers R2 (test local).
     #[arg(long)]
     skip_upload: bool,
+    /// Chemin vers le script Python de décodage GRIB.
+    /// Par défaut : `scripts/decode_arome_om_grib.py` (relatif au CWD).
+    /// Surcharger si le binaire est lancé hors de la racine du dépôt.
+    #[arg(long, default_value = "scripts/decode_arome_om_grib.py")]
+    script_path: PathBuf,
 }
 
 /// `floor_6h(now - publication_delay)`. Renvoie l'heure 00/06/12/18
@@ -89,7 +96,8 @@ fn parse_packages(s: &str) -> Result<Vec<&'static str>> {
         match p {
             "SP1" => out.push("SP1"),
             "SP2" => out.push("SP2"),
-            "SP3" => out.push("SP3"),
+            // SP3 is not yet in the VARIABLES registry; reject early so the user
+            // gets a clear error rather than silently downloading nothing.
             other => anyhow::bail!("unsupported package: {other:?}"),
         }
     }
@@ -110,8 +118,7 @@ async fn main() -> Result<()> {
         .map(|p| match p {
             "SP1" => Package::Sp1,
             "SP2" => Package::Sp2,
-            "SP3" => Package::Sp3,
-            _ => unreachable!("parse_packages guarantees set"),
+            _ => unreachable!("parse_packages guarantees valid set"),
         })
         .collect();
 
@@ -130,6 +137,7 @@ async fn main() -> Result<()> {
 
     let work_dir = args.work_dir.clone();
     let r2_prefix = args.r2_prefix.clone();
+    let script_path = Arc::new(args.script_path.clone());
 
     // Counters partagés.
     let counters = Arc::new(tokio::sync::Mutex::new((0u32, 0u32))); // (written, failures)
@@ -139,9 +147,10 @@ async fn main() -> Result<()> {
         let r2 = r2.clone();
         let work_dir = work_dir.clone();
         let r2_prefix = r2_prefix.clone();
+        let script_path = script_path.clone();
         let counters = counters.clone();
         async move {
-            match process_item(&mf, r2.as_deref(), territory, pkg, leadtime, run, &grid, &work_dir, &r2_prefix).await {
+            match process_item(&mf, r2.as_deref(), territory, pkg, leadtime, run, &grid, &work_dir, &r2_prefix, &script_path).await {
                 Ok(n) => {
                     let mut c = counters.lock().await;
                     c.0 += n;
@@ -169,7 +178,13 @@ async fn main() -> Result<()> {
     // Metadata + GC seulement si au moins un fichier a été écrit et qu'on uploade.
     if let Some(r2) = r2.as_deref() {
         if written > 0 {
-            let var_names: Vec<&'static str> = VARIABLES.iter().map(|v| v.om_name).collect();
+            let pkg_ids: std::collections::HashSet<&'static str> =
+                packages.iter().map(|p| p.as_api_id()).collect();
+            let var_names: Vec<&'static str> = VARIABLES
+                .iter()
+                .filter(|v| pkg_ids.contains(v.package))
+                .map(|v| v.om_name)
+                .collect();
             if let Err(e) = update_metadata(r2, run, &var_names).await {
                 tracing::error!(error = %e, "metadata update failed");
             }
@@ -196,6 +211,7 @@ async fn process_item(
     grid: &ReunionGrid,
     work_dir: &std::path::Path,
     r2_prefix: &str,
+    script_path: &std::path::Path,
 ) -> Result<u32> {
     let run_dir = work_dir.join(format!("{}Z", run.format("%Y%m%dT%H%M")));
     std::fs::create_dir_all(&run_dir)?;
@@ -210,7 +226,7 @@ async fn process_item(
     let nc_dir = run_dir.join(format!("nc_{pkg}_{leadtime:03}h"));
     let pkg_id = pkg.as_api_id();
     let vars_of_interest: Vec<&VariableEntry> = variables_for_package(pkg_id).collect();
-    let slices = grib_decoder::decode(&grib_path, &nc_dir, &vars_of_interest, (grid.ny(), grid.nx()))
+    let slices = grib_decoder::decode(&grib_path, &nc_dir, &vars_of_interest, (grid.ny(), grid.nx()), script_path)
         .await
         .with_context(|| format!("decode {pkg} leadtime={leadtime}"))?;
 
@@ -243,7 +259,7 @@ async fn write_and_upload_slice(
             "run": run.to_rfc3339(),
         }),
     };
-    write_spatial_omfile(&local, &slice.data, grid, &meta)
+    write_spatial_omfile(&local, slice.om_name, &slice.data, grid, &meta)
         .context("write OMfile")?;
     if let Some(r2) = r2 {
         let key = format!(
@@ -258,14 +274,14 @@ async fn write_and_upload_slice(
     Ok(())
 }
 
-/// Supprime les préfixes de run plus vieux que `run - keep_runs_back × 3h`.
+/// Supprime les préfixes de run plus vieux que `run - keep_runs_back × 6h`.
 async fn gc_old_runs(
     r2: &R2Client,
     r2_prefix: &str,
     current_run: DateTime<Utc>,
     keep_runs_back: u32,
 ) -> Result<()> {
-    let cutoff = current_run - Duration::hours(3 * i64::from(keep_runs_back));
+    let cutoff = current_run - Duration::hours(RUN_INTERVAL_H * i64::from(keep_runs_back));
     let all = r2.list_prefix(&format!("{}/", r2_prefix.trim_end_matches('/'))).await?;
     for k in all {
         // On parse `r2_prefix/Y/M/D/HHMMZ/...` et on garde tout >= cutoff.
@@ -325,7 +341,9 @@ mod tests {
 
     #[test]
     fn parse_packages_csv() {
-        assert_eq!(parse_packages("SP1,SP3").unwrap(), vec!["SP1", "SP3"]);
+        assert_eq!(parse_packages("SP1,SP2").unwrap(), vec!["SP1", "SP2"]);
         assert!(parse_packages("SP1,FOO").is_err());
+        // SP3 has no vars in the VARIABLES registry — rejected at startup.
+        assert!(parse_packages("SP1,SP3").is_err());
     }
 }

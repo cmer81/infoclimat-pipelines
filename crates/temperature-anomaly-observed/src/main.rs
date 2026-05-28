@@ -12,7 +12,7 @@ use clap::Parser;
 use pipeline_core::anomaly::subtract_with_nan;
 use pipeline_core::climatology::{ClimatologyCache, day_of_year_index};
 use pipeline_core::grid::{ArpegeEuropeGrid, Bbox};
-use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
+use pipeline_core::omfile_io::{ANOMALY_VARIABLE, OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
 use pipeline_core::regrid::bilinear_regrid;
 
@@ -175,7 +175,7 @@ async fn process_day(
         generated_at: Utc::now(),
         extra: serde_json::json!({ "day": day.to_string(), "doy": doy }),
     };
-    write_spatial_omfile(&local_path, &anomaly, dst_grid, &meta)?;
+    write_spatial_omfile(&local_path, ANOMALY_VARIABLE, &anomaly, dst_grid, &meta)?;
 
     if let Some(r2) = r2 {
         let key = format!("{}/{}", args.r2_anomaly_prefix.trim_end_matches('/'), filename);
