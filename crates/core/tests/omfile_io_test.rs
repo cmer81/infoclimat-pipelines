@@ -63,9 +63,9 @@ fn multi_variable_omfile_roundtrip_preserves_all_variables() {
     write_multi_variable_omfile(
         tmp.path(),
         &[
-            ("temperature_2m", &arr_a),
-            ("relative_humidity_2m", &arr_b),
-            ("precipitation", &arr_c),
+            ("temperature_2m", &arr_a, 100.0),
+            ("relative_humidity_2m", &arr_b, 100.0),
+            ("precipitation", &arr_c, 100.0),
         ],
         &grid,
         &meta,
@@ -140,9 +140,54 @@ fn multi_variable_omfile_rejects_mismatched_shape() {
     let tmp = NamedTempFile::new().unwrap();
     let result = write_multi_variable_omfile(
         tmp.path(),
-        &[("bad_var", &wrong_shape)],
+        &[("bad_var", &wrong_shape, 100.0)],
         &grid,
         &meta,
     );
     assert!(result.is_err(), "should reject wrong shape");
+}
+
+/// Régression : avec un `scale_factor` global de 100, les grandeurs élevées
+/// (pression ~1013 hPa, cumul de précip > 327 mm) débordaient l'`i16` et
+/// devenaient NaN/garbage. Un facteur adapté par variable doit les préserver.
+#[test]
+fn multi_variable_omfile_preserves_large_values_with_proper_scale() {
+    let grid = ArpegeEuropeGrid;
+    let (ny, nx) = (grid.ny(), grid.nx());
+    // Pression réaliste ~1013 hPa (déborde à scale 100 : 1013×100 ≫ i16::MAX).
+    let pressure = Array2::<f32>::from_shape_fn((ny, nx), |(j, _)| 1013.0 + (j % 7) as f32 * 0.5);
+    // Cumul de précip ~500 mm (déborde à scale 100 : plafonne à 327.67).
+    let precip_sum = Array2::<f32>::from_shape_fn((ny, nx), |(j, i)| 500.0 + ((j + i) % 11) as f32);
+
+    let meta = OmfileMetadata {
+        source: "large_values".to_string(),
+        generated_at: chrono::Utc::now(),
+        extra: serde_json::Value::Null,
+    };
+    let tmp = NamedTempFile::new().unwrap();
+    write_multi_variable_omfile(
+        tmp.path(),
+        &[("pressure_msl", &pressure, 20.0), ("precipitation_sum", &precip_sum, 5.0)],
+        &grid,
+        &meta,
+    )
+    .unwrap();
+
+    let root = OmFileReader::from_file(tmp.path().to_str().unwrap()).unwrap();
+    for (name, expected) in [("pressure_msl", &pressure), ("precipitation_sum", &precip_sum)] {
+        let var = root.get_child_by_name(name).unwrap();
+        let arr_node = var.expect_array().unwrap();
+        let dims: Vec<u64> = arr_node.get_dimensions().to_vec();
+        let read: Array2<f32> = arr_node
+            .read::<f32>(&[0..dims[0], 0..dims[1]])
+            .unwrap()
+            .into_dimensionality::<ndarray::Ix2>()
+            .unwrap();
+        for ((j, i), &v) in expected.indexed_iter() {
+            let got = read[[j, i]];
+            assert!(got.is_finite(), "{name}: NaN at ({j},{i}) — overflow not fixed");
+            // résolution : pression 0.05 (1/20), précip 0.2 (1/5).
+            assert!((got - v).abs() < 0.3, "{name}: ({j},{i}) attendu {v}, lu {got}");
+        }
+    }
 }

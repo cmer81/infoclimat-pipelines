@@ -313,12 +313,14 @@ async fn write_and_upload_timestep(
         }),
     };
 
-    // Construit les paires (nom, données) pour write_multi_variable_omfile.
+    // Construit les triples (nom, données, scale_factor) pour write_multi_variable_omfile.
     // On trie par om_name pour un ordre déterministe dans le fichier.
     let mut sorted: Vec<&DecodedSlice> = slices.iter().collect();
     sorted.sort_by_key(|s| s.om_name);
-    let variables: Vec<(&str, &ndarray::Array2<f32>)> =
-        sorted.iter().map(|s| (s.om_name, &s.data)).collect();
+    let variables: Vec<(&str, &ndarray::Array2<f32>, f32)> = sorted
+        .iter()
+        .map(|s| (s.om_name, &s.data, arome_om_forecast::variables::scale_factor_for(s.om_name)))
+        .collect();
 
     write_multi_variable_omfile(&local, &variables, grid, &meta).context("write OMfile")?;
     tracing::debug!(file = %local.display(), vars = variables.len(), "wrote multi-var OMfile");

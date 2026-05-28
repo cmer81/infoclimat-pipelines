@@ -119,15 +119,23 @@ pub fn write_spatial_omfile<G: Grid>(
 ///
 /// Toutes les variables partagent la même métadonnée JSON (un seul scalar
 /// `metadata` attaché comme enfant de la première variable).
+///
+/// Chaque variable porte son propre `scale_factor` (3e élément du tuple) : le
+/// codec `PforDelta2dInt16` stocke `round(valeur × scale_factor)` en `i16`, donc
+/// la valeur physique max représentable est `32767 / scale_factor`. Un facteur
+/// par variable évite l'overflow des grandeurs élevées (pression ~1013 hPa,
+/// cumuls de précip > 327 mm) tout en gardant une bonne résolution sur les
+/// petites (température, etc.). Le facteur est écrit dans le fichier → le lecteur
+/// décode automatiquement.
 pub fn write_multi_variable_omfile<G: Grid>(
     path: &Path,
-    variables: &[(&str, &Array2<f32>)],
+    variables: &[(&str, &Array2<f32>, f32)],
     grid: &G,
     meta: &OmfileMetadata,
 ) -> Result<()> {
     anyhow::ensure!(!variables.is_empty(), "no variables to write");
     let (ny, nx) = (grid.ny(), grid.nx());
-    for (name, arr) in variables {
+    for (name, arr, _) in variables {
         let (any, anx) = arr.dim();
         anyhow::ensure!(
             any == ny && anx == nx,
@@ -151,7 +159,7 @@ pub fn write_multi_variable_omfile<G: Grid>(
     let chunk_x = (nx as u64).min(64);
     let mut array_offsets = Vec::with_capacity(variables.len());
     let mut pending_meta = Some(meta_offset);
-    for (name, arr) in variables {
+    for (name, arr, scale_factor) in variables {
         let children: Vec<_> = pending_meta.take().into_iter().collect();
         let finalized = {
             let mut aw = writer
@@ -159,7 +167,7 @@ pub fn write_multi_variable_omfile<G: Grid>(
                     vec![ny as u64, nx as u64],
                     vec![chunk_y, chunk_x],
                     OmCompressionType::PforDelta2dInt16,
-                    100.0,
+                    *scale_factor,
                     0.0,
                 )
                 .map_err(|e| anyhow::anyhow!("prepare_array {name}: {e}"))?;
