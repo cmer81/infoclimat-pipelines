@@ -256,7 +256,7 @@ pub enum MeteoFranceError {
 - **Hard fails** (exit 2, abort) : R2 init KO, MF auth setup KO, `work_dir` non créable.
 - **Soft fails** (compteur, continue) : échec d'un item (package, window) après retry ; échec d'un OMfile parmi N ; échec d'un upload individuel.
 - **Exit code final** : `0` si `failures == 0` ET ≥1 OMfile écrit ; `1` sinon ; `2` sur hard fail.
-- **Métadonnée toujours mise à jour à la fin**, même sur soft fails — reflète l'état R2 réel.
+- **Métadonnée mise à jour à la fin** dès que la boucle s'est exécutée (i.e. après soft fails inclus) — elle reflète l'état R2 réel. Sur hard fail (abort prématuré), elle n'est pas régénérée ; les fichiers déjà uploadés restent annoncés par la métadonnée du run précédent, donc pas d'incohérence visible côté client.
 
 ## Testing
 
