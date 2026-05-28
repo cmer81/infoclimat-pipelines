@@ -101,6 +101,8 @@ l'Inde — pas juste les deux îles malgré le nom officiel.
 | SP2 (4) | `dew_point_2m`, `cloud_cover_low`, `cloud_cover_mid`, `cloud_cover_high` |
 | Dérivée | `precipitation_sum` : cumul de précipitation depuis le début du run, croissant à chaque échéance (H0 = 0, NaN propagé) |
 
+> **Précipitation** : le `tp` GRIB d'AROME-OM est **accumulé depuis le début du run**. La variable `precipitation` publiée est donc **dé-cumulée en pas horaire** (`tp[N] − tp[N-1]`, convention Open-Meteo), et `precipitation_sum` est le cumul brut (`tp[N]`).
+
 SP3 est exclu du MVP (flux énergétiques de surface peu pertinents pour une carte
 grand public). `parse_packages` rejette `SP3` au startup pour éviter une boucle
 d'erreurs silencieuses.

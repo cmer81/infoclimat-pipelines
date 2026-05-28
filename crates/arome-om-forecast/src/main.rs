@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&run_dir).context("creating run_dir")?;
 
     // Décodage parallèle livré DANS L'ORDRE croissant des leadtimes (`buffered`),
-    // condition nécessaire pour entretenir l'accumulateur de cumul séquentiel.
+    // condition nécessaire pour le dé-cumul séquentiel (besoin du `tp` précédent).
     let decoded = stream::iter(leadtimes.into_iter().map(|leadtime| {
         let mf = mf.clone();
         let work_dir = work_dir.clone();
@@ -163,8 +163,9 @@ async fn main() -> Result<()> {
     .buffered(args.concurrency);
     tokio::pin!(decoded);
 
-    // Accumulateur de cumul : zéros au départ, réutilisé d'un leadtime à l'autre.
-    let mut acc = ndarray::Array2::<f32>::zeros((grid.ny(), grid.nx()));
+    // `tp` (cumul depuis le run) de l'échéance précédente, pour le dé-cumul
+    // horaire. Zéros au départ → l'horaire de H+1 = tp[1] - 0 = tp[1].
+    let mut prev_tp = ndarray::Array2::<f32>::zeros((grid.ny(), grid.nx()));
     let mut written = 0u32;
     let mut failures = 0u32;
 
@@ -174,7 +175,7 @@ async fn main() -> Result<()> {
                 tracing::warn!(leadtime, "leadtime skipped (0 slices)");
             }
             Ok(mut slices) => {
-                arome_om_forecast::cumul::accumulate_and_inject(&mut slices, &mut acc, leadtime);
+                arome_om_forecast::cumul::split_precipitation(&mut slices, &mut prev_tp, leadtime);
                 match write_and_upload_timestep(
                     slices,
                     run,
