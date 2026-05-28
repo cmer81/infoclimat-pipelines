@@ -49,6 +49,12 @@ def decode(grib_path: str, shortnames: List[str], out_dir: str) -> int:
             print(f"WARN: variable {sn!r} not found or unreadable: {e}", file=sys.stderr)
             continue
 
+        if len(ds.data_vars) == 0:
+            # Cas courant à leadtime=0 pour les variables cumulatives
+            # (max_i10fg, tp, ssrd, ...) dont le `stepRange = 0-1` n'a pas
+            # de valeur à l'instant initial.
+            print(f"INFO: variable {sn!r} has no data at this leadtime (cumulative var at lead 0?)", file=sys.stderr)
+            continue
         var = ds[sn] if sn in ds.data_vars else next(iter(ds.data_vars.values()))
         # `step` peut être un scalaire si une seule leadtime dans la fenêtre.
         steps = ds["step"].values if "step" in ds.coords else [None]
