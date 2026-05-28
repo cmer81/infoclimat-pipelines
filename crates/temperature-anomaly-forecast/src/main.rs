@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 
     let climato = ClimatologyCache::load_from_dir(&args.climato_dir)
         .with_context(|| format!("loading climato from {:?}", args.climato_dir))?;
-    let dst_grid = ArpegeEuropeGrid::default();
+    let dst_grid = ArpegeEuropeGrid;
 
     let r2 = if !args.skip_upload {
         Some(R2Client::new(R2Config::from_env()?).await?)
@@ -206,6 +206,7 @@ enum ProcessOutcome {
     SkippedPartial,
 }
 
+#[expect(clippy::too_many_arguments, reason = "pipeline context struct not yet introduced")]
 async fn process_day(
     day: NaiveDate,
     model_run: DateTime<Utc>,
@@ -326,7 +327,7 @@ mod tests {
 
     #[test]
     fn arpege_europe_grid_is_741_by_521() {
-        let g = ArpegeEuropeGrid::default();
+        let g = ArpegeEuropeGrid;
         assert_eq!(g.nx(), 741);
         assert_eq!(g.ny(), 521);
     }
