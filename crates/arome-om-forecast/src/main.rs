@@ -2,11 +2,12 @@
 //!
 //! Étapes (cf. `docs/superpowers/specs/2026-05-28-arome-om-forecast-design.md`):
 //!  1. Détermine le run target (`floor_6h(now - publication_delay)` ou `--run`).
-//!  2. Build le plan (packages × leadtimes 0..=horizon).
-//!  3. Pour chaque (pkg, leadtime), parallel buffer_unordered :
-//!     a. Download GRIB2 (1 fichier par leadtime, `time=001H`…).
-//!     b. Décode (script python) → N slices (var, leadtime, Array2).
-//!     c. Écrit OMfile local + upload R2.
+//!  2. Build la liste des leadtimes 0..=horizon.
+//!  3. Pour chaque leadtime, parallel buffer_unordered :
+//!     a. Pour chaque package : download GRIB2 + decode → slices.
+//!     b. Collecte tous les slices du leadtime.
+//!     c. Écrit UN OMfile multi-variable : `{run_dir}/{ISO_valid_time}.om`.
+//!     d. Upload R2 : `{r2_prefix}/Y/M/D/HHMMZ/{ISO_valid_time}.om`.
 //!  4. Update metadata.
 //!  5. GC des runs trop vieux.
 
@@ -21,11 +22,11 @@ use futures::stream::{self, StreamExt};
 use pipeline_core::arome_om_metadata::update_metadata;
 use pipeline_core::grid::{Grid, ReunionGrid};
 use pipeline_core::meteofrance_api::{AromeOmClient, AromeOmTerritory, MeteoFranceAuth, MeteoFranceError};
-use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
+use pipeline_core::omfile_io::{OmfileMetadata, write_multi_variable_omfile};
 use pipeline_core::r2::{CACHE_ROLLING, R2Client, R2Config};
 
 use arome_om_forecast::grib_decoder::{self, DecodedSlice};
-use arome_om_forecast::planning::{Package, build_plan};
+use arome_om_forecast::planning::Package;
 use arome_om_forecast::variables::{VARIABLES, VariableEntry, variables_for_package};
 
 const PUBLICATION_DELAY_H: i64 = 6;
@@ -47,7 +48,7 @@ struct Args {
     /// Packages à télécharger (CSV).
     #[arg(long, default_value = "SP1,SP2")]
     packages: String,
-    /// Concurrence (downloads parallèles).
+    /// Concurrence (leadtimes parallèles).
     #[arg(long, default_value_t = 4)]
     concurrency: usize,
     /// Dossier de travail (GRIB téléchargés + OMfiles produits).
@@ -123,8 +124,10 @@ async fn main() -> Result<()> {
         .collect();
 
     let run = args.run.unwrap_or_else(|| latest_run(Utc::now()));
-    let plan = build_plan(args.horizon_h, &packages);
-    tracing::info!(%run, items = plan.len(), concurrency = args.concurrency, "plan built");
+
+    // Tous les leadtimes : 0..=horizon_h.
+    let leadtimes: Vec<u32> = (0..=args.horizon_h).collect();
+    tracing::info!(%run, leadtimes = leadtimes.len(), concurrency = args.concurrency, "plan built");
 
     let auth = Arc::new(MeteoFranceAuth::from_env().context("init auth")?);
     let mf = Arc::new(AromeOmClient::new(auth));
@@ -139,27 +142,45 @@ async fn main() -> Result<()> {
     let r2_prefix = args.r2_prefix.clone();
     let script_path = Arc::new(args.script_path.clone());
 
-    // Counters partagés.
-    let counters = Arc::new(tokio::sync::Mutex::new((0u32, 0u32))); // (written, failures)
+    // Counters partagés : (written, failures).
+    let counters = Arc::new(tokio::sync::Mutex::new((0u32, 0u32)));
 
-    stream::iter(plan.into_iter().map(|(pkg, leadtime)| {
+    stream::iter(leadtimes.into_iter().map(|leadtime| {
         let mf = mf.clone();
         let r2 = r2.clone();
         let work_dir = work_dir.clone();
         let r2_prefix = r2_prefix.clone();
         let script_path = script_path.clone();
+        let packages = packages.clone();
         let counters = counters.clone();
         async move {
-            match process_item(&mf, r2.as_deref(), territory, pkg, leadtime, run, &grid, &work_dir, &r2_prefix, &script_path).await {
-                Ok(n) => {
+            match process_leadtime(
+                &mf,
+                r2.as_deref(),
+                territory,
+                &packages,
+                leadtime,
+                run,
+                &grid,
+                &work_dir,
+                &r2_prefix,
+                &script_path,
+            )
+            .await
+            {
+                Ok(true) => {
                     let mut c = counters.lock().await;
-                    c.0 += n;
-                    tracing::info!(%pkg, leadtime, n, "item OK");
+                    c.0 += 1;
+                    tracing::info!(leadtime, "leadtime OK");
+                }
+                Ok(false) => {
+                    // 0 slices decoded (e.g. all packages 404) — skip silently.
+                    tracing::warn!(leadtime, "leadtime skipped (0 slices)");
                 }
                 Err(e) => {
                     let mut c = counters.lock().await;
                     c.1 += 1;
-                    tracing::error!(%pkg, leadtime, error = %e, "item FAILED");
+                    tracing::error!(leadtime, error = %e, "leadtime FAILED");
                     if matches!(e.downcast_ref::<MeteoFranceError>(), Some(MeteoFranceError::Auth(_))) {
                         tracing::error!("auth error — aborting");
                         std::process::exit(2);
@@ -173,7 +194,7 @@ async fn main() -> Result<()> {
     .await;
 
     let (written, failures) = *counters.lock().await;
-    tracing::info!(written, failures, "all items done");
+    tracing::info!(written, failures, "all leadtimes done");
 
     // Metadata + GC seulement si au moins un fichier a été écrit et qu'on uploade.
     if let Some(r2) = r2.as_deref() {
@@ -200,72 +221,105 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Traite un leadtime complet : télécharge tous les packages, décode, collecte
+/// les slices, et écrit un seul OMfile multi-variable.
+///
+/// Retourne `Ok(true)` si le fichier a été écrit, `Ok(false)` si 0 slices (skip).
 #[expect(clippy::too_many_arguments, reason = "pipeline context struct not yet introduced")]
-async fn process_item(
+async fn process_leadtime(
     mf: &AromeOmClient,
     r2: Option<&R2Client>,
     territory: AromeOmTerritory,
-    pkg: Package,
+    packages: &[Package],
     leadtime: u32,
     run: DateTime<Utc>,
     grid: &ReunionGrid,
     work_dir: &std::path::Path,
     r2_prefix: &str,
     script_path: &std::path::Path,
-) -> Result<u32> {
+) -> Result<bool> {
     let run_dir = work_dir.join(format!("{}Z", run.format("%Y%m%dT%H%M")));
     std::fs::create_dir_all(&run_dir)?;
-    let grib_path = run_dir.join(format!("{pkg}_{leadtime:03}h.grib2"));
 
-    let bytes = mf
-        .fetch_package(territory, pkg.as_api_id(), run, leadtime)
-        .await
-        .with_context(|| format!("fetch {pkg} leadtime={leadtime}"))?;
-    std::fs::write(&grib_path, &bytes).with_context(|| format!("write {grib_path:?}"))?;
+    // Télécharge et décode chaque package séquentiellement au sein du leadtime
+    // (garder simple ; la parallélisation est au niveau des leadtimes).
+    let mut all_slices: Vec<DecodedSlice> = Vec::new();
+    for pkg in packages {
+        let grib_path = run_dir.join(format!("{pkg}_{leadtime:03}h.grib2"));
+        let bytes = mf
+            .fetch_package(territory, pkg.as_api_id(), run, leadtime)
+            .await
+            .with_context(|| format!("fetch {pkg} leadtime={leadtime}"))?;
+        std::fs::write(&grib_path, &bytes)
+            .with_context(|| format!("write {grib_path:?}"))?;
 
-    let nc_dir = run_dir.join(format!("nc_{pkg}_{leadtime:03}h"));
-    let pkg_id = pkg.as_api_id();
-    let vars_of_interest: Vec<&VariableEntry> = variables_for_package(pkg_id).collect();
-    let slices = grib_decoder::decode(&grib_path, &nc_dir, &vars_of_interest, (grid.ny(), grid.nx()), script_path)
+        let nc_dir = run_dir.join(format!("nc_{pkg}_{leadtime:03}h"));
+        let pkg_id = pkg.as_api_id();
+        let vars_of_interest: Vec<&VariableEntry> = variables_for_package(pkg_id).collect();
+        let slices = grib_decoder::decode(
+            &grib_path,
+            &nc_dir,
+            &vars_of_interest,
+            (grid.ny(), grid.nx()),
+            script_path,
+        )
         .await
         .with_context(|| format!("decode {pkg} leadtime={leadtime}"))?;
-
-    let mut written = 0u32;
-    for slice in slices {
-        match write_and_upload_slice(slice, run, &run_dir, r2, r2_prefix, grid).await {
-            Ok(_) => written += 1,
-            Err(e) => tracing::warn!(error = %e, "slice failed"),
-        }
+        all_slices.extend(slices);
     }
-    Ok(written)
+
+    if all_slices.is_empty() {
+        return Ok(false);
+    }
+
+    write_and_upload_timestep(all_slices, run, leadtime, &run_dir, r2, r2_prefix, grid).await?;
+    Ok(true)
 }
 
-async fn write_and_upload_slice(
-    slice: DecodedSlice,
+/// Calcule le `valid_time` (run + leadtime), nomme le fichier `{YYYY-MM-DDTHHMM}.om`,
+/// écrit l'OMfile multi-variable, et uploade vers R2.
+async fn write_and_upload_timestep(
+    slices: Vec<DecodedSlice>,
     run: DateTime<Utc>,
+    leadtime: u32,
     run_local_dir: &std::path::Path,
     r2: Option<&R2Client>,
     r2_prefix: &str,
     grid: &ReunionGrid,
 ) -> Result<()> {
-    let filename = format!("{}_{:03}h.om", slice.om_name, slice.leadtime_h);
+    let valid_time = run + Duration::hours(i64::from(leadtime));
+    // Nom du fichier : `{YYYY-MM-DDTHHMM}.om` — pas de secondes, pas de 'Z'
+    // (le répertoire parent `HHMMZ` encode déjà le fuseau du run).
+    let filename = format!("{}.om", valid_time.format("%Y-%m-%dT%H%M"));
     let local = run_local_dir.join(&filename);
+
     let meta = OmfileMetadata {
         source: format!("arome_om_reunion_{}", run.format("%Y%m%dT%HZ")),
         generated_at: Utc::now(),
         extra: serde_json::json!({
-            "variable": slice.om_name,
-            "leadtime_h": slice.leadtime_h,
+            "leadtime_h": leadtime,
             "run": run.to_rfc3339(),
+            "valid_time": valid_time.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         }),
     };
-    write_spatial_omfile(&local, slice.om_name, &slice.data, grid, &meta)
-        .context("write OMfile")?;
+
+    // Construit les paires (nom, données) pour write_multi_variable_omfile.
+    // On trie par om_name pour un ordre déterministe dans le fichier.
+    let mut sorted: Vec<&DecodedSlice> = slices.iter().collect();
+    sorted.sort_by_key(|s| s.om_name);
+    let variables: Vec<(&str, &ndarray::Array2<f32>)> =
+        sorted.iter().map(|s| (s.om_name, &s.data)).collect();
+
+    write_multi_variable_omfile(&local, &variables, grid, &meta).context("write OMfile")?;
+    tracing::debug!(file = %local.display(), vars = variables.len(), "wrote multi-var OMfile");
+
     if let Some(r2) = r2 {
         let key = format!(
             "{}/{}/{}/{}/{}Z/{}",
             r2_prefix.trim_end_matches('/'),
-            run.format("%Y"), run.format("%m"), run.format("%d"),
+            run.format("%Y"),
+            run.format("%m"),
+            run.format("%d"),
             run.format("%H%M"),
             filename,
         );
@@ -345,5 +399,22 @@ mod tests {
         assert!(parse_packages("SP1,FOO").is_err());
         // SP3 has no vars in the VARIABLES registry — rejected at startup.
         assert!(parse_packages("SP1,SP3").is_err());
+    }
+
+    #[test]
+    fn valid_time_filename_format_no_seconds_no_z() {
+        // Le format du nom de fichier est YYYY-MM-DDTHHMM (pas de secondes, pas de Z).
+        let run = Utc.with_ymd_and_hms(2026, 5, 28, 6, 0, 0).unwrap();
+        let valid_time = run + Duration::hours(18);
+        let filename = format!("{}.om", valid_time.format("%Y-%m-%dT%H%M"));
+        assert_eq!(filename, "2026-05-29T0000.om");
+    }
+
+    #[test]
+    fn valid_time_filename_crosses_day_boundary() {
+        let run = Utc.with_ymd_and_hms(2026, 5, 28, 18, 0, 0).unwrap();
+        let valid_time = run + Duration::hours(12);
+        let filename = format!("{}.om", valid_time.format("%Y-%m-%dT%H%M"));
+        assert_eq!(filename, "2026-05-29T0600.om");
     }
 }

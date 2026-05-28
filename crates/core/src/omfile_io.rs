@@ -1,16 +1,25 @@
 //! Écriture/lecture d'un OMfile spatial sur la grille ARPEGE France.
 //!
-//! Structure du fichier (calquée sur les OMfiles natifs Open-Meteo et
-//! sur `infoclimat-om-worker/src/aggregate.rs::encode_omfile`) :
+//! Deux layouts supportés, tous deux compatibles avec `getChildByName(var)` :
 //!
+//! **Layout mono-variable** (utilisé par les pipelines anomalie) :
 //! ```text
 //! root: None (empty container)
 //!   └── <variable_name> : f32 array [ny, nx]
 //!         └── metadata : String (JSON-serialized OmfileMetadata)
 //! ```
 //!
-//! Cette forme est nécessaire pour que le file-reader JS d'Open-Meteo navigue
-//! correctement via `getChildByName(variable_name)`.
+//! **Layout multi-variable** (utilisé par `arome-om-forecast`, conforme au
+//! `data_spatial` natif Open-Meteo — une seule clé par leadtime) :
+//! ```text
+//! root: None (empty container)
+//!   ├── <variable_0> : f32 array [ny, nx]   ← porte le scalar `metadata`
+//!   ├── <variable_1> : f32 array [ny, nx]
+//!   └── …
+//!         metadata : String (JSON-serialized OmfileMetadata)  ← enfant de var_0
+//! ```
+//!
+//! Dans les deux cas, le client navigue via `getChildByName(variable_name)`.
 
 use std::path::Path;
 
@@ -97,6 +106,77 @@ pub fn write_spatial_omfile<G: Grid>(
         .write_none("", &[arr_offset])
         .map_err(|e| anyhow::anyhow!("write_none root: {e}"))?;
 
+    writer
+        .write_trailer(root_offset)
+        .map_err(|e| anyhow::anyhow!("write_trailer: {e}"))?;
+    Ok(())
+}
+
+/// Écrit un OMfile spatial contenant plusieurs variables comme enfants du root,
+/// chacune un tableau 2D `[ny, nx]` sur la même grille. Correspond au layout
+/// `data_spatial` natif Open-Meteo : le client fait `reader.getChildByName(var)`
+/// pour récupérer le tableau de la variable sélectionnée.
+///
+/// Toutes les variables partagent la même métadonnée JSON (un seul scalar
+/// `metadata` attaché comme enfant de la première variable).
+pub fn write_multi_variable_omfile<G: Grid>(
+    path: &Path,
+    variables: &[(&str, &Array2<f32>)],
+    grid: &G,
+    meta: &OmfileMetadata,
+) -> Result<()> {
+    anyhow::ensure!(!variables.is_empty(), "no variables to write");
+    let (ny, nx) = (grid.ny(), grid.nx());
+    for (name, arr) in variables {
+        let (any, anx) = arr.dim();
+        anyhow::ensure!(
+            any == ny && anx == nx,
+            "variable {name:?} shape ({any}, {anx}) ne correspond pas à la grille ({ny}, {nx})",
+        );
+    }
+
+    let file = std::fs::File::create(path).with_context(|| format!("creating {path:?}"))?;
+    let mut writer = OmFileWriter::new(file, 1 << 20);
+
+    // 1) Métadonnée d'abord (sera référencée comme child du 1er tableau).
+    let meta_json = serde_json::to_string(meta)?;
+    let meta_offset = writer
+        .write_scalar(meta_json, METADATA_CHILD, &[])
+        .map_err(|e| anyhow::anyhow!("write_scalar metadata: {e}"))?;
+
+    // 2) Chaque variable comme tableau ; la première porte le scalar metadata.
+    //    `meta_offset` est consommé (non-Copy) lors du premier appel write_array,
+    //    donc on l'enveloppe dans une Option et on le prend exactement une fois.
+    let chunk_y = (ny as u64).min(64);
+    let chunk_x = (nx as u64).min(64);
+    let mut array_offsets = Vec::with_capacity(variables.len());
+    let mut pending_meta = Some(meta_offset);
+    for (name, arr) in variables {
+        let children: Vec<_> = pending_meta.take().into_iter().collect();
+        let finalized = {
+            let mut aw = writer
+                .prepare_array::<f32>(
+                    vec![ny as u64, nx as u64],
+                    vec![chunk_y, chunk_x],
+                    OmCompressionType::PforDelta2dInt16,
+                    100.0,
+                    0.0,
+                )
+                .map_err(|e| anyhow::anyhow!("prepare_array {name}: {e}"))?;
+            aw.write_data(arr.view().into_dyn(), None, None)
+                .map_err(|e| anyhow::anyhow!("write_data {name}: {e}"))?;
+            aw.finalize()
+        };
+        let offset = writer
+            .write_array(finalized, name, &children)
+            .map_err(|e| anyhow::anyhow!("write_array {name}: {e}"))?;
+        array_offsets.push(offset);
+    }
+
+    // 3) Root : conteneur vide pointant sur toutes les variables.
+    let root_offset = writer
+        .write_none("", &array_offsets)
+        .map_err(|e| anyhow::anyhow!("write_none root: {e}"))?;
     writer
         .write_trailer(root_offset)
         .map_err(|e| anyhow::anyhow!("write_trailer: {e}"))?;

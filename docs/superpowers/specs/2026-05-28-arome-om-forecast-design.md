@@ -332,3 +332,7 @@ Le registry MVP retenu (12 vars) :
 - SP2 (4) : `2d, lcc, mcc, hcc`
 
 (Pas de SP3 au MVP : flux énergétiques peu pertinents pour une carte grand public ; à ajouter au cas par cas si demande utilisateur.)
+
+---
+
+**Post-Task-0 update :** the R2 layout was corrected to match Open-Meteo's `data_spatial` convention — one multi-variable OMfile per leadtime, named `{ISO_valid_time}.om` (e.g. `2026-05-29T0000.om`), with variables as children of root. Replaces the initial design's `{variable}_{leadtime}h.om` (one file per variable).
