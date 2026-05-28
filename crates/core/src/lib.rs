@@ -1,5 +1,6 @@
 pub mod anomaly;
 pub mod anomaly_metadata;
+pub mod arome_om_metadata;
 pub mod climatology;
 pub mod grid;
 pub mod logging;
