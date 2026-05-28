@@ -93,6 +93,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "ndarray 0.17.2",
+ "netcdf",
  "omfiles",
  "pipeline-core",
  "reqwest",
