@@ -22,11 +22,13 @@ pub struct DecodedSlice {
 /// Décode un fichier GRIB2 multi-messages en N slices `(variable, leadtime, Array2)`.
 ///
 /// `expected_dims` : `(ny, nx)` de `ReunionGrid` — sert à valider chaque slice.
+/// `script_path` : chemin vers `decode_arome_om_grib.py` (absolu ou relatif au CWD).
 pub async fn decode(
     grib_path: &Path,
     out_dir: &Path,
     variables_of_interest: &[&VariableEntry],
     expected_dims: (usize, usize),
+    script_path: &Path,
 ) -> Result<Vec<DecodedSlice>> {
     std::fs::create_dir_all(out_dir).with_context(|| format!("mkdir {out_dir:?}"))?;
     let shortnames: Vec<&str> = variables_of_interest
@@ -36,7 +38,7 @@ pub async fn decode(
     let shortnames_csv = shortnames.join(",");
 
     let status = Command::new("python3")
-        .arg("scripts/decode_arome_om_grib.py")
+        .arg(script_path)
         .arg("--in")
         .arg(grib_path)
         .arg("--shortnames")

@@ -27,9 +27,10 @@ from typing import List
 
 try:
     import cfgrib  # noqa: F401
+    import numpy as np
     import xarray as xr
 except ImportError as e:
-    print(f"FATAL: missing dependency ({e}). Run: pip install cfgrib xarray netCDF4", file=sys.stderr)
+    print(f"FATAL: missing dependency ({e}). Run: pip install cfgrib xarray netCDF4 numpy", file=sys.stderr)
     sys.exit(2)
 
 
@@ -57,9 +58,10 @@ def decode(grib_path: str, shortnames: List[str], out_dir: str) -> int:
             continue
         var = ds[sn] if sn in ds.data_vars else next(iter(ds.data_vars.values()))
         # `step` peut être un scalaire si une seule leadtime dans la fenêtre.
-        steps = ds["step"].values if "step" in ds.coords else [None]
-        if steps.shape == ():
-            steps = [steps.item()]
+        # np.atleast_1d normalise aussi bien le tableau numpy scalaire que la
+        # liste [None] du chemin de secours — évite AttributeError sur .shape.
+        steps_raw = ds["step"].values if "step" in ds.coords else [None]
+        steps = np.atleast_1d(steps_raw)
 
         for step in steps:
             sub = var.sel(step=step) if step is not None and "step" in var.dims else var
