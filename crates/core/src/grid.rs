@@ -3,8 +3,9 @@
 //! Grilles disponibles :
 //! - [`ArpegeEuropeGrid`] — ARPEGE Europe (Open-Meteo, 521×741, 0.1°), origine
 //!   SW (lat 20°, lon -32°), coin NE (lat 72°, lon 42°).
-//! - [`ReunionGrid`] — AROME-OM Réunion (Météo-France, valeurs provisoires
-//!   jusqu'à exécution de Task 0).
+//! - [`ReunionGrid`] — AROME-OM Océan Indien (Météo-France, 1395×899, 0.025°),
+//!   couvre Réunion, Mayotte, Madagascar et l'océan Indien environnant (côte
+//!   est-africaine, sud de l'Inde). Nom conservé pour la continuité côté client.
 
 pub trait Grid {
     fn nx(&self) -> usize;
@@ -73,32 +74,32 @@ impl Grid for ArpegeEuropeGrid {
 
 /// Grille AROME-OM Réunion (modèle Météo-France, Outre-Mer Océan Indien).
 ///
-/// Lat/lon régulière. Les valeurs définitives proviennent du header GRIB2 d'un
-/// fichier réel (cf. `docs/superpowers/specs/2026-05-28-arome-om-forecast-design.md`,
-/// section "Inconnues à lever dès la première PR"). Pour l'instant ce sont des
-/// PLACEHOLDERS estimés — à remplacer dès que Task 0 (probe API) sera exécutée.
+/// Lat/lon régulière à 0.025°. Le domaine couvre l'ensemble de l'océan Indien
+/// occidental : Réunion, Mayotte, Madagascar, côte est-africaine et sud de
+/// l'Inde. Dimensions et extent lus sur le header GRIB2 d'un fichier réel
+/// (Task 0 — probe API réalisée le 2026-05-28). Le nom `ReunionGrid` est
+/// conservé pour la continuité côté client `maps/`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReunionGrid;
 
 impl Grid for ReunionGrid {
-    // TODO(task-0): remplacer ces 8 valeurs par celles lues sur grib_dump.
     fn nx(&self) -> usize {
-        201
+        1395
     }
     fn ny(&self) -> usize {
-        161
+        899
     }
     fn lon_min(&self) -> f64 {
-        53.0
+        32.75
     }
     fn lon_max(&self) -> f64 {
-        58.0
+        67.6
     }
     fn lat_min(&self) -> f64 {
-        -23.0
+        -25.9
     }
     fn lat_max(&self) -> f64 {
-        -19.0
+        -3.45
     }
     fn dx(&self) -> f64 {
         0.025
@@ -133,17 +134,17 @@ mod reunion_tests {
     #[test]
     fn reunion_grid_has_expected_dimensions() {
         let g = ReunionGrid;
-        // Placeholder values — TODO(task-0): replace after probing the real GRIB header.
-        // Tester chaque constante explicitement : un search-replace partiel à Task 0
+        // Valeurs lues sur le header GRIB2 réel (Task 0, 2026-05-28).
+        // Tester chaque constante explicitement : un search-replace partiel
         // doit échouer ici, pas silencieusement.
-        assert_eq!(g.nx(), 201);
-        assert_eq!(g.ny(), 161);
+        assert_eq!(g.nx(), 1395);
+        assert_eq!(g.ny(), 899);
         assert!((g.dx() - 0.025).abs() < 1e-9);
         assert!((g.dy() - 0.025).abs() < 1e-9);
-        assert!((g.lon_min() - 53.0).abs() < 1e-9);
-        assert!((g.lon_max() - 58.0).abs() < 1e-9);
-        assert!((g.lat_min() - (-23.0)).abs() < 1e-9);
-        assert!((g.lat_max() - (-19.0)).abs() < 1e-9);
+        assert!((g.lon_min() - 32.75).abs() < 1e-9);
+        assert!((g.lon_max() - 67.6).abs() < 1e-9);
+        assert!((g.lat_min() - (-25.9)).abs() < 1e-9);
+        assert!((g.lat_max() - (-3.45)).abs() < 1e-9);
     }
 
     #[test]
@@ -159,9 +160,11 @@ mod reunion_tests {
     #[test]
     fn reunion_grid_rejects_outside_bbox() {
         let g = ReunionGrid;
-        // Méditerranée — way outside.
+        // Greenwich (lon 0°) — way west of the bbox, outside.
         assert!(g.lonlat_to_indices(0.0, 0.0).is_none());
-        // Around Saint-Denis (Réunion). Should be inside.
+        // Saint-Denis, Réunion (~55.5°E, -21.1°N) — inside the domain.
         assert!(g.lonlat_to_indices(55.5, -21.1).is_some());
+        // Mayotte (~45.2°E, -12.8°N) — also covered by the wider Indian Ocean domain.
+        assert!(g.lonlat_to_indices(45.2, -12.8).is_some());
     }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Décode un GRIB2 multi-messages AROME-OM et produit 1 NetCDF par
-(variable, leadtime) dans un dossier de sortie.
+"""Décode un GRIB2 AROME-OM et produit 1 NetCDF par (variable, leadtime)
+dans un dossier de sortie. Fonctionne avec des GRIB mono-leadtime (un fichier
+par heure de prévision, format réel de l'API) ou multi-messages.
 
 Appelé par le binaire Rust `arome-om-forecast`. Sortie NetCDF parce que c'est
 le seul format que le wrapper Rust sait déjà lire (dep `netcdf` partagée avec

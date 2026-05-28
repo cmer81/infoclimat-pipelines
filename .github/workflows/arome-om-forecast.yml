@@ -2,9 +2,8 @@ name: arome-om-forecast
 
 on:
   schedule:
-    # Lance ~4h après chaque run AROME-OM (00/03/06/09/12/15/18/21Z).
-    # Si la cadence réelle est différente (Task 0), ajuster.
-    - cron: '0 4,7,10,13,16,19,22,1 * * *'
+    # Lance ~1h après la publication d'un run AROME-OM (runs 00/06/12/18 UTC, publication +6h).
+    - cron: '0 7,13,19,1 * * *'
   workflow_dispatch:
 
 jobs:
@@ -44,7 +43,7 @@ jobs:
           mkdir -p work
           ./target/release/arome-om-forecast \
             --territory reunion \
-            --packages SP1,SP2,SP3 \
-            --horizon-h 42 \
+            --packages SP1,SP2 \
+            --horizon-h 48 \
             --work-dir work \
             --r2-prefix data_spatial/arome_om_reunion

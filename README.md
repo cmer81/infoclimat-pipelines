@@ -126,8 +126,8 @@ cargo run --release -p arome-om-forecast -- \
 
 #### Cron production
 
-`.github/workflows/arome-om-forecast.yml`, ~8 runs/jour alignés sur la publication
-AROME-OM (nouveau run disponible ~4 h après l'heure du run modèle).
+`.github/workflows/arome-om-forecast.yml`, 4 runs/jour aligné sur 00/06/12/18 UTC publication
+AROME-OM (nouveau run disponible ~6 h après l'heure du run modèle).
 
 #### Secrets GitHub Actions requis
 

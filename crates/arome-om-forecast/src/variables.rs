@@ -25,25 +25,24 @@ pub struct VariableEntry {
     pub package: &'static str,
 }
 
-/// Inventaire MVP : pack surface (SP1+SP2+SP3). Le mapping exact (shortName et
-/// répartition par package) est à aligner sur l'inventaire réel de l'API
-/// AROME-OM (cf. Task 0 du plan — à exécuter quand prérequis user dispos).
+/// Inventaire MVP : SP1 (8 vars) + SP2 (4 vars). ShortNames et répartition par
+/// package issus de l'inventaire réel de l'API AROME-OM (Task 0, 2026-05-28).
+/// SP3 exclu du MVP.
 pub const VARIABLES: &[VariableEntry] = &[
-    // SP1 — variables atmosphériques surface essentielles
-    VariableEntry { grib_short_name: "2t",    om_name: "temperature_2m",        unit_conversion: UnitConversion::KelvinToCelsius,       package: "SP1" },
-    VariableEntry { grib_short_name: "2d",    om_name: "dew_point_2m",          unit_conversion: UnitConversion::KelvinToCelsius,       package: "SP1" },
-    VariableEntry { grib_short_name: "2r",    om_name: "relative_humidity_2m",  unit_conversion: UnitConversion::None,                  package: "SP1" },
-    VariableEntry { grib_short_name: "10u",   om_name: "wind_u_10m",            unit_conversion: UnitConversion::None,                  package: "SP1" },
-    VariableEntry { grib_short_name: "10v",   om_name: "wind_v_10m",            unit_conversion: UnitConversion::None,                  package: "SP1" },
-    VariableEntry { grib_short_name: "fg10",  om_name: "wind_gusts_10m",        unit_conversion: UnitConversion::None,                  package: "SP1" },
-    VariableEntry { grib_short_name: "prmsl", om_name: "pressure_msl",          unit_conversion: UnitConversion::PascalToHectopascal,   package: "SP1" },
-    // SP2 — précipitations + radiations
-    VariableEntry { grib_short_name: "tp",    om_name: "precipitation",         unit_conversion: UnitConversion::KgPerM2ToMm,           package: "SP2" },
-    VariableEntry { grib_short_name: "ssrd",  om_name: "shortwave_radiation",   unit_conversion: UnitConversion::None,                  package: "SP2" },
-    // SP3 — nuages
-    VariableEntry { grib_short_name: "lcc",   om_name: "cloud_cover_low",       unit_conversion: UnitConversion::None,                  package: "SP3" },
-    VariableEntry { grib_short_name: "mcc",   om_name: "cloud_cover_mid",       unit_conversion: UnitConversion::None,                  package: "SP3" },
-    VariableEntry { grib_short_name: "hcc",   om_name: "cloud_cover_high",      unit_conversion: UnitConversion::None,                  package: "SP3" },
+    // SP1 (8 vars) — paramètres courants surface
+    VariableEntry { grib_short_name: "2t",        om_name: "temperature_2m",       unit_conversion: UnitConversion::KelvinToCelsius,     package: "SP1" },
+    VariableEntry { grib_short_name: "2r",        om_name: "relative_humidity_2m", unit_conversion: UnitConversion::None,                package: "SP1" },
+    VariableEntry { grib_short_name: "10u",       om_name: "wind_u_10m",           unit_conversion: UnitConversion::None,                package: "SP1" },
+    VariableEntry { grib_short_name: "10v",       om_name: "wind_v_10m",           unit_conversion: UnitConversion::None,                package: "SP1" },
+    VariableEntry { grib_short_name: "10si",      om_name: "wind_speed_10m",       unit_conversion: UnitConversion::None,                package: "SP1" },
+    VariableEntry { grib_short_name: "max_i10fg", om_name: "wind_gusts_10m",       unit_conversion: UnitConversion::None,                package: "SP1" },
+    VariableEntry { grib_short_name: "prmsl",     om_name: "pressure_msl",         unit_conversion: UnitConversion::PascalToHectopascal, package: "SP1" },
+    VariableEntry { grib_short_name: "tp",        om_name: "precipitation",        unit_conversion: UnitConversion::KgPerM2ToMm,         package: "SP1" },
+    // SP2 (4 vars) — additionnels surface
+    VariableEntry { grib_short_name: "2d",        om_name: "dew_point_2m",         unit_conversion: UnitConversion::KelvinToCelsius,     package: "SP2" },
+    VariableEntry { grib_short_name: "lcc",       om_name: "cloud_cover_low",      unit_conversion: UnitConversion::None,                package: "SP2" },
+    VariableEntry { grib_short_name: "mcc",       om_name: "cloud_cover_mid",      unit_conversion: UnitConversion::None,                package: "SP2" },
+    VariableEntry { grib_short_name: "hcc",       om_name: "cloud_cover_high",     unit_conversion: UnitConversion::None,                package: "SP2" },
 ];
 
 pub fn variables_for_package(pkg: &str) -> impl Iterator<Item = &'static VariableEntry> {
@@ -91,7 +90,7 @@ mod tests {
 
     #[test]
     fn variables_for_each_package_non_empty() {
-        for pkg in ["SP1", "SP2", "SP3"] {
+        for pkg in ["SP1", "SP2"] {
             assert!(variables_for_package(pkg).next().is_some(), "no vars in {pkg}");
         }
     }

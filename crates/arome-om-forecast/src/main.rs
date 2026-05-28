@@ -1,10 +1,10 @@
 //! CLI `arome-om-forecast` — pipeline AROME-OM Réunion (prévision brute).
 //!
 //! Étapes (cf. `docs/superpowers/specs/2026-05-28-arome-om-forecast-design.md`):
-//!  1. Détermine le run target (`floor_3h(now - publication_delay)` ou `--run`).
-//!  2. Build le plan (packages × windows).
-//!  3. Pour chaque (pkg, window), parallel buffer_unordered :
-//!     a. Download GRIB2.
+//!  1. Détermine le run target (`floor_6h(now - publication_delay)` ou `--run`).
+//!  2. Build le plan (packages × leadtimes 0..=horizon).
+//!  3. Pour chaque (pkg, leadtime), parallel buffer_unordered :
+//!     a. Download GRIB2 (1 fichier par leadtime, `time=001H`…).
 //!     b. Décode (script python) → N slices (var, leadtime, Array2).
 //!     c. Écrit OMfile local + upload R2.
 //!  4. Update metadata.
@@ -25,10 +25,10 @@ use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{CACHE_ROLLING, R2Client, R2Config};
 
 use arome_om_forecast::grib_decoder::{self, DecodedSlice};
-use arome_om_forecast::planning::{Package, TimeWindow, build_plan};
+use arome_om_forecast::planning::{Package, build_plan};
 use arome_om_forecast::variables::{VARIABLES, VariableEntry, variables_for_package};
 
-const PUBLICATION_DELAY_H: i64 = 4;
+const PUBLICATION_DELAY_H: i64 = 6;
 
 #[derive(Debug, Parser)]
 #[command(about = "Compute AROME-OM forecast OMfiles (raw values) and upload to R2")]
@@ -36,14 +36,14 @@ struct Args {
     /// Territoire AROME-OM (pour l'instant: reunion).
     #[arg(long, default_value = "reunion")]
     territory: String,
-    /// Run cible (ISO 8601). Si omis : floor_3h(now - PUBLICATION_DELAY_H).
+    /// Run cible (ISO 8601). Si omis : floor_6h(now - PUBLICATION_DELAY_H).
     #[arg(long)]
     run: Option<DateTime<Utc>>,
-    /// Horizon max en heures (multiple de 6, capped par l'horizon du modèle).
-    #[arg(long, default_value_t = 42)]
+    /// Horizon max en heures (capped par l'horizon du modèle, 48h).
+    #[arg(long, default_value_t = 48)]
     horizon_h: u32,
     /// Packages à télécharger (CSV).
-    #[arg(long, default_value = "SP1,SP2,SP3")]
+    #[arg(long, default_value = "SP1,SP2")]
     packages: String,
     /// Concurrence (downloads parallèles).
     #[arg(long, default_value_t = 4)]
@@ -62,18 +62,16 @@ struct Args {
     skip_upload: bool,
 }
 
-/// `floor_3h(now - publication_delay)`. Renvoie l'heure 00/03/06/09/12/15/18/21
-/// la plus récente >= maintenant - PUBLICATION_DELAY_H.
+/// `floor_6h(now - publication_delay)`. Renvoie l'heure 00/06/12/18
+/// la plus récente disponible : runs AROME-OM à 00/06/12/18 UTC, publication ~6h après.
 fn latest_run(now: DateTime<Utc>) -> DateTime<Utc> {
     let candidate = now - Duration::hours(PUBLICATION_DELAY_H);
     let h = candidate.hour();
-    let floor_h = (h / 3) * 3;
-    // SAFETY: floor_h is in 0..=21 (since (h/3)*3 where h<24),
-    // so and_hms_opt can never return None for valid minutes/seconds (both 0).
+    let floor_h = (h / 6) * 6; // -> 0, 6, 12, or 18
     candidate
         .date_naive()
         .and_hms_opt(floor_h, 0, 0)
-        .expect("floor_h in 0..=21 with zero minutes/seconds: infallible")
+        .expect("valid hms")
         .and_utc()
 }
 
@@ -136,23 +134,23 @@ async fn main() -> Result<()> {
     // Counters partagés.
     let counters = Arc::new(tokio::sync::Mutex::new((0u32, 0u32))); // (written, failures)
 
-    stream::iter(plan.into_iter().map(|(pkg, window)| {
+    stream::iter(plan.into_iter().map(|(pkg, leadtime)| {
         let mf = mf.clone();
         let r2 = r2.clone();
         let work_dir = work_dir.clone();
         let r2_prefix = r2_prefix.clone();
         let counters = counters.clone();
         async move {
-            match process_item(&mf, r2.as_deref(), territory, pkg, window, run, &grid, &work_dir, &r2_prefix).await {
+            match process_item(&mf, r2.as_deref(), territory, pkg, leadtime, run, &grid, &work_dir, &r2_prefix).await {
                 Ok(n) => {
                     let mut c = counters.lock().await;
                     c.0 += n;
-                    tracing::info!(%pkg, %window, n, "item OK");
+                    tracing::info!(%pkg, leadtime, n, "item OK");
                 }
                 Err(e) => {
                     let mut c = counters.lock().await;
                     c.1 += 1;
-                    tracing::error!(%pkg, %window, error = %e, "item FAILED");
+                    tracing::error!(%pkg, leadtime, error = %e, "item FAILED");
                     if matches!(e.downcast_ref::<MeteoFranceError>(), Some(MeteoFranceError::Auth(_))) {
                         tracing::error!("auth error — aborting");
                         std::process::exit(2);
@@ -193,7 +191,7 @@ async fn process_item(
     r2: Option<&R2Client>,
     territory: AromeOmTerritory,
     pkg: Package,
-    window: TimeWindow,
+    leadtime: u32,
     run: DateTime<Utc>,
     grid: &ReunionGrid,
     work_dir: &std::path::Path,
@@ -201,20 +199,20 @@ async fn process_item(
 ) -> Result<u32> {
     let run_dir = work_dir.join(format!("{}Z", run.format("%Y%m%dT%H%M")));
     std::fs::create_dir_all(&run_dir)?;
-    let grib_path = run_dir.join(format!("{pkg}_{window}.grib2"));
+    let grib_path = run_dir.join(format!("{pkg}_{leadtime:03}h.grib2"));
 
     let bytes = mf
-        .fetch_package(territory, pkg.as_api_id(), run, &window.as_api_param())
+        .fetch_package(territory, pkg.as_api_id(), run, leadtime)
         .await
-        .with_context(|| format!("fetch {pkg} {window}"))?;
+        .with_context(|| format!("fetch {pkg} leadtime={leadtime}"))?;
     std::fs::write(&grib_path, &bytes).with_context(|| format!("write {grib_path:?}"))?;
 
-    let nc_dir = run_dir.join(format!("nc_{pkg}_{window}"));
+    let nc_dir = run_dir.join(format!("nc_{pkg}_{leadtime:03}h"));
     let pkg_id = pkg.as_api_id();
     let vars_of_interest: Vec<&VariableEntry> = variables_for_package(pkg_id).collect();
     let slices = grib_decoder::decode(&grib_path, &nc_dir, &vars_of_interest, (grid.ny(), grid.nx()))
         .await
-        .with_context(|| format!("decode {pkg} {window}"))?;
+        .with_context(|| format!("decode {pkg} leadtime={leadtime}"))?;
 
     let mut written = 0u32;
     for slice in slices {
@@ -298,19 +296,19 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn latest_run_floors_to_3h_with_publication_delay() {
-        // 2026-05-28 14:23Z → candidate = 10:23Z → floor 09:00Z.
+    fn latest_run_floors_to_6h_with_publication_delay() {
+        // 2026-05-28 14:23Z → candidate = 08:23Z → floor_6h = 06:00Z.
         let now = Utc.with_ymd_and_hms(2026, 5, 28, 14, 23, 0).unwrap();
         let run = latest_run(now);
-        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 28, 9, 0, 0).unwrap());
+        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 28, 6, 0, 0).unwrap());
     }
 
     #[test]
     fn latest_run_handles_day_boundary() {
-        // 2026-05-28 01:00Z → candidate = 21:00 the day before → 21:00Z J-1.
+        // 2026-05-28 01:00Z → candidate = 2026-05-27 19:00Z → floor_6h = 18:00Z J-1.
         let now = Utc.with_ymd_and_hms(2026, 5, 28, 1, 0, 0).unwrap();
         let run = latest_run(now);
-        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 27, 21, 0, 0).unwrap());
+        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 27, 18, 0, 0).unwrap());
     }
 
     #[test]

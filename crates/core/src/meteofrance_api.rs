@@ -22,27 +22,30 @@ pub const TOKEN_ENDPOINT: &str = "https://portail-api.meteofrance.fr/token";
 
 /// Construit l'URL d'un fichier GRIB2 sur l'API DPPaquetAROME-OM.
 ///
-/// Le path exact (`DPPaquetAROME-OM` ou alternative) doit être confirmé sur
-/// un appel réel (Task 0 du plan). Cette fonction prend les composants comme
-/// paramètres pour rester testable et trivialement ajustable.
+/// Chaque fichier correspond à un seul leadtime horaire (ex. `time=001H`).
+/// Le produit (`productOMOI` pour AROME-OM Indien) est passé en paramètre pour
+/// rester testable et réutilisable pour d'autres territoires.
+#[expect(clippy::too_many_arguments, reason = "URL builder — all args are distinct &str components of the API URL; a builder struct would be over-engineering for a pure function used only in tests and fetch_package")]
 pub fn build_product_url(
     base: &str,
-    api_namespace: &str,           // ex. "DPPaquetAROME-OM"
-    model: &str,                   // ex. "AROME-INDIEN" (résolu à Task 0)
-    grid: &str,                    // ex. "0.025"
-    package: &str,                 // ex. "SP1"
+    api_namespace: &str,    // ex. "DPPaquetAROME-OM"
+    model: &str,            // ex. "AROME-OM-INDIEN"
+    grid: &str,             // ex. "0.025"
+    package: &str,          // ex. "SP1"
+    product: &str,          // ex. "productOMOI"
     reference_time: DateTime<Utc>,
-    time_window: &str,             // ex. "00H06H"
+    time: &str,             // ex. "001H" (leadtime 3-digit zero-padded)
 ) -> String {
     format!(
-        "{base}/previnum/{ns}/v1/models/{model}/grids/{grid}/packages/{package}/productARO?referencetime={rt}&time={tw}&format=grib2",
+        "{base}/previnum/{ns}/v1/models/{model}/grids/{grid}/packages/{package}/{product}?referencetime={rt}&time={t}&format=grib2",
         base = base.trim_end_matches('/'),
         ns = api_namespace,
         model = model,
         grid = grid,
         package = package,
+        product = product,
         rt = reference_time.format("%Y-%m-%dT%H:%M:%SZ"),
-        tw = time_window,
+        t = time,
     )
 }
 
@@ -217,9 +220,7 @@ use bytes::Bytes;
 const MAX_TRANSIENT_RETRIES: u32 = 3;
 const MAX_RATELIMIT_RETRIES: u32 = 3;
 
-/// Identifiant API d'un territoire AROME-OM. La valeur exacte du `model_id`
-/// (utilisée dans le path URL) est à confirmer via Task 0. `Reunion` correspond
-/// vraisemblablement à "AROME-INDIEN" côté API Météo-France.
+/// Identifiant API d'un territoire AROME-OM.
 #[derive(Debug, Clone, Copy)]
 pub enum AromeOmTerritory {
     Reunion,
@@ -228,9 +229,7 @@ pub enum AromeOmTerritory {
 impl AromeOmTerritory {
     pub fn model_id(&self) -> &'static str {
         match self {
-            // TODO(task-0): confirmer le nom exact ("AROME-OM-REUN" ?
-            // "AROME-OUTREMER-INDIEN" ?) sur une requête réelle.
-            AromeOmTerritory::Reunion => "AROME-INDIEN",
+            AromeOmTerritory::Reunion => "AROME-OM-INDIEN",
         }
     }
     pub fn grid_id(&self) -> &'static str {
@@ -255,30 +254,34 @@ impl AromeOmClient {
             .expect("reqwest client build cannot fail with rustls feature enabled");
         Self {
             base: PUBLIC_API_BASE.to_string(),
-            // TODO(task-0): confirmer le namespace exact (DPPaquetAROME-OM ou alternative).
             api_namespace: "DPPaquetAROME-OM".to_string(),
             auth,
             http,
         }
     }
 
-    /// Download GRIB2 d'un (territoire, package, run, window). Gère retry,
+    /// Download GRIB2 d'un (territoire, package, run, leadtime). Gère retry,
     /// refresh-token-on-401, et rate limiting.
+    ///
+    /// `leadtime` est l'heure de prévision (0..=horizon). L'API AROME-OM expose
+    /// un fichier par leadtime (`time=000H`, `001H`, …, `048H`).
     pub async fn fetch_package(
         &self,
         territory: AromeOmTerritory,
         package: &str,
         reference_time: DateTime<Utc>,
-        time_window: &str,
+        leadtime: u32,
     ) -> Result<Bytes, MeteoFranceError> {
+        let time = format!("{leadtime:03}H");
         let url = build_product_url(
             &self.base,
             &self.api_namespace,
             territory.model_id(),
             territory.grid_id(),
             package,
+            "productOMOI",
             reference_time,
-            time_window,
+            &time,
         );
 
         let mut token = self.auth.get_token().await?;
@@ -352,29 +355,30 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn url_format_matches_meteofrance_spec() {
+    fn url_format_matches_meteofrance_om_spec() {
         let rt = Utc.with_ymd_and_hms(2026, 5, 28, 0, 0, 0).unwrap();
         let url = build_product_url(
             PUBLIC_API_BASE,
             "DPPaquetAROME-OM",
-            "AROME-INDIEN",
+            "AROME-OM-INDIEN",
             "0.025",
             "SP1",
+            "productOMOI",
             rt,
-            "00H06H",
+            "001H",
         );
         assert_eq!(
             url,
-            "https://public-api.meteofrance.fr/previnum/DPPaquetAROME-OM/v1/models/AROME-INDIEN/grids/0.025/packages/SP1/productARO?referencetime=2026-05-28T00:00:00Z&time=00H06H&format=grib2"
+            "https://public-api.meteofrance.fr/previnum/DPPaquetAROME-OM/v1/models/AROME-OM-INDIEN/grids/0.025/packages/SP1/productOMOI?referencetime=2026-05-28T00:00:00Z&time=001H&format=grib2"
         );
     }
 
     #[test]
     fn url_trims_trailing_slash_on_base() {
         let rt = Utc.with_ymd_and_hms(2026, 1, 1, 6, 0, 0).unwrap();
-        let url = build_product_url("https://x.example/", "NS", "M", "0.1", "SP1", rt, "07H12H");
+        let url = build_product_url("https://x.example/", "NS", "M", "0.1", "SP1", "productOMOI", rt, "007H");
         assert!(!url.contains("example//"));
-        assert!(url.contains("time=07H12H"));
+        assert!(url.contains("time=007H"));
     }
 
     #[test]
