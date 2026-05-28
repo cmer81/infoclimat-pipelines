@@ -83,11 +83,46 @@ Fenêtres :
 - **forecast** : J+0→J+4 réécrits à chaque run ; GC des fichiers dont la date est
   passée (sinon un J+0 d'hier traîne et est mal routé par le client).
 
-### Pipeline `arome-om-forecast` (AROME-OM Réunion, prévision brute)
+### Pipeline `arome-om-forecast` (AROME-OM Réunion-Mayotte, prévision brute)
 
-Publie sur R2 les OMfiles AROME-OM Réunion (prévision brute, ~12 variables surface,
-horizon 42 h). Consommé tel quel par le client `maps/` sous le domaine
-`arome_om_reunion`.
+Publie sur R2 les OMfiles AROME-OM Réunion-Mayotte / Océan Indien (prévision brute,
+**11 variables surface**, horizon **48 h** par pas horaire). Consommé tel quel par
+le client `maps/` sous le domaine `arome_om_reunion`.
+
+Couvre la grille AROME-OM-INDIEN native (**1395 × 899 à 0,025°**, ~2,7 km de
+résolution), qui s'étend de Madagascar et la côte est-africaine jusqu'au sud de
+l'Inde — pas juste les deux îles malgré le nom officiel.
+
+#### Variables exposées (SP1 + SP2)
+
+| Package | Variables (`om_name`) |
+|---|---|
+| SP1 (7) | `temperature_2m`, `relative_humidity_2m`, `wind_u_component_10m`, `wind_v_component_10m`, `wind_gusts_10m`, `pressure_msl`, `precipitation` |
+| SP2 (4) | `dew_point_2m`, `cloud_cover_low`, `cloud_cover_mid`, `cloud_cover_high` |
+
+SP3 est exclu du MVP (flux énergétiques de surface peu pertinents pour une carte
+grand public). `parse_packages` rejette `SP3` au startup pour éviter une boucle
+d'erreurs silencieuses.
+
+#### Layout R2
+
+Un **OMfile multi-variables par leadtime** (convention Open-Meteo `data_spatial`),
+les variables sont attachées comme enfants du root et lues côté client via
+`reader.getChildByName(variable)` :
+
+```
+data_spatial/arome_om_reunion/{Y}/{M}/{D}/{HHMM}Z/{YYYY-MM-DDTHHMM}.om
+data_spatial/arome_om_reunion/latest.json
+data_spatial/arome_om_reunion/in-progress.json
+data_spatial/arome_om_reunion/{Y}/{M}/{D}/{HHMM}Z/meta.json
+```
+
+⚠️ Le GRIB AROME-OM stocke les rangées du **nord au sud** (`latitudeOfFirstGridPoint`
+≈ -3.45°) alors qu'Open-Meteo attend `row 0 = latMin` (sud). Le décodeur Python
+détecte l'orientation et flippe automatiquement — sans ça, le client lirait des
+pixels océaniques uniformes au lieu de la variation piton/côtes (vu en debug :
+Saint-Denis affichait ~27 °C uniforme au lieu de la vraie variation 7-31 °C
+sur le domaine).
 
 #### Pré-requis
 
@@ -102,11 +137,12 @@ horizon 42 h). Consommé tel quel par le client `maps/` sous le domaine
 
   ```bash
   source venv/bin/activate
-  pip install cfgrib xarray netCDF4
+  pip install -r scripts/requirements.txt   # cfgrib, xarray, netCDF4, numpy, cdsapi
   ```
 
   Le binaire appelle `python3` du PATH sur `scripts/decode_arome_om_grib.py` pour
   décoder le GRIB2 ; le venv doit donc être activé avant de lancer le binaire.
+  `numpy` est utilisé pour normaliser l'axe latitude lors du flip nord→sud.
 
 - Bucket R2 déjà configuré (cf. autres pipelines).
 
@@ -116,18 +152,21 @@ horizon 42 h). Consommé tel quel par le client `maps/` sous le domaine
 source venv/bin/activate
 cargo run --release -p arome-om-forecast -- \
   --territory reunion \
-  --packages SP1,SP2,SP3 \
-  --horizon-h 42 \
+  --packages SP1,SP2 \
+  --horizon-h 48 \
   --work-dir work \
   --skip-upload
 ```
 
-`--skip-upload` produit les OMfiles localement sans toucher R2.
+`--skip-upload` produit les OMfiles localement sans toucher R2. Compter ~30 s
+pour un run complet (49 leadtimes × ~10 MB par OMfile multi-var) en
+`--concurrency 4`.
 
 #### Cron production
 
-`.github/workflows/arome-om-forecast.yml`, 4 runs/jour aligné sur 00/06/12/18 UTC publication
-AROME-OM (nouveau run disponible ~6 h après l'heure du run modèle).
+`.github/workflows/arome-om-forecast.yml`, 4 runs/jour à 01/07/13/19 UTC, aligné
+sur la publication des runs AROME-OM (00/06/12/18 UTC + ~6 h de latence
+publication MF).
 
 #### Secrets GitHub Actions requis
 
@@ -152,7 +191,7 @@ infoclimat-pipelines/
 │   ├── temperature-anomaly-climatology/      # CLI one-shot (lit NetCDF ERA5)
 │   ├── temperature-anomaly-observed/         # CLI cron quotidien (CDS jour par jour)
 │   ├── temperature-anomaly-forecast/         # CLI cron 4×/jour (Open-Meteo)
-│   └── arome-om-forecast/                   # CLI cron ~8×/jour (AROME-OM Réunion, MF API)
+│   └── arome-om-forecast/                   # CLI cron 4×/jour (AROME-OM Réunion-Mayotte, MF API)
 ├── scripts/
 │   ├── download_era5.py                      # client cdsapi (CDS Copernicus)
 │   ├── decode_arome_om_grib.py               # décodeur GRIB2 AROME-OM (cfgrib)
@@ -163,7 +202,7 @@ infoclimat-pipelines/
     ├── temperature-anomaly-climatology.yml   # workflow_dispatch
     ├── temperature-anomaly-observed.yml      # cron quotidien
     ├── temperature-anomaly-forecast.yml      # cron 4×/jour
-    └── arome-om-forecast.yml                 # cron ~8×/jour
+    └── arome-om-forecast.yml                 # cron 4×/jour
 ```
 
 ---
@@ -174,7 +213,7 @@ infoclimat-pipelines/
 cp .env.example .env
 # remplir CDS_API_KEY + R2_*  (R2_BUCKET = infoclimat-modeles-data en prod)
 
-cargo test --workspace        # 33 tests doivent passer
+cargo test --workspace        # 68 tests doivent passer
 ```
 
 ### Build de la climatologie
@@ -282,10 +321,16 @@ Le bucket doit être en **accès public** (R2 → Settings → Public access, so
 - **`netcdf` feature `static`** : compile HDF5/libnetcdf depuis les sources
   (cmake requis, ~5 min au premier build, caché ensuite). Évite d'installer
   `libnetcdf-dev`/`libhdf5-dev`. Le crate forecast ne dépend pas de netcdf.
-- **Format OMfile produit** : calqué sur les OMfiles natifs Open-Meteo — root
-  vide → child array `temperature_2m_anomaly` (f32, [ny=521, nx=741]) → child
-  scalar `metadata` (JSON). Compression `PforDelta2dInt16`, scale_factor 100.0
-  (résolution 0.01°, large pour des anomalies ±30 °C).
+- **Format OMfile produit** : calqué sur les OMfiles natifs Open-Meteo.
+  - *Pipelines anomalie* (`temperature-anomaly-*`) : un seul child array
+    `temperature_2m_anomaly` (f32, `[ny=521, nx=741]`) → child scalar
+    `metadata` (JSON). Le nom du child est passé en argument à
+    `write_spatial_omfile`, plus hardcodé.
+  - *Pipeline `arome-om-forecast`* : **N child arrays** (un par variable) sous
+    le root, plus un child scalar `metadata` rattaché au premier array. Le
+    client maps/ fait `reader.getChildByName(variable)` pour récupérer la
+    variable sélectionnée. Utilise `write_multi_variable_omfile`.
+  - Compression dans les deux cas : `PforDelta2dInt16`, `scale_factor` 100.0.
 - **Run forecast** : `floor_6h(now − 6h)` choisit le dernier run ARPEGE
   supposément publié (Open-Meteo publie ~5-6 h après l'heure du run).
 
@@ -295,10 +340,18 @@ Le bucket doit être en **accès public** (R2 → Settings → Public access, so
 
 Le crate `core/` est réutilisable pour d'autres pipelines :
 
+- **Autres territoires DOM-TOM AROME-OM** : Antilles, Guyane, Nouvelle-Calédonie,
+  Polynésie. ~30 min de code par territoire (probe API pour le `model_id`
+  exact, lecture du header GRIB pour les dims, ajout d'une variante à l'enum
+  `AromeOmTerritory` et d'une impl de `Grid`). Le `META_DOMAIN_PREFIX`
+  hardcodé dans `arome_om_metadata` est à paramétrer en argument avant
+  d'attaquer le 2e territoire.
 - `precipitation-anomaly-*` (même schéma, autre variable).
 - Anomalies normalisées (z-score) — nécessite de précalculer l'écart-type par
   jour-de-l'année en plus de la moyenne.
 - Élargissement Global, ou variante haute-résolution AROME France (horizon plus
   court) — changer la grille de référence dans `core::grid`.
+- Pipeline radar Météo-France : réutilisera `pipeline-core::meteofrance_api`
+  (auth + retry + token cache).
 - Pin `omfiles` sur un tag/rev plutôt que `branch = "main"`.
 - Paralléliser le download du workflow climato (limite 6 h GitHub).
