@@ -3,6 +3,7 @@ pub mod anomaly_metadata;
 pub mod climatology;
 pub mod grid;
 pub mod logging;
+pub mod meteofrance_api;
 pub mod omfile_io;
 pub mod r2;
 pub mod regrid;
