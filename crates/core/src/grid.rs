@@ -36,14 +36,8 @@ pub trait Grid {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ArpegeEuropeGrid;
-
-impl Default for ArpegeEuropeGrid {
-    fn default() -> Self {
-        Self
-    }
-}
 
 impl Grid for ArpegeEuropeGrid {
     fn nx(&self) -> usize {

@@ -206,7 +206,10 @@ enum ProcessOutcome {
     SkippedPartial,
 }
 
-#[expect(clippy::too_many_arguments, reason = "pipeline context struct not yet introduced")]
+// 8 paramètres (1 au-dessus de la limite clippy) : `day` varie à chaque
+// itération, les 7 autres sont du contexte partagé passé par référence. Les
+// regrouper dans un struct n'améliorerait pas la lisibilité de cet appel unique.
+#[expect(clippy::too_many_arguments)]
 async fn process_day(
     day: NaiveDate,
     model_run: DateTime<Utc>,

@@ -13,6 +13,12 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 
+# Discipline clippy partagée par tous les crates (chaque crate fait
+# `[lints] workspace = true`). `priority = -1` laisse la possibilité
+# d'affiner un lint précis à un niveau supérieur si besoin.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
 [workspace.dependencies]
 # Internal
 pipeline-core = { path = "crates/core" }
