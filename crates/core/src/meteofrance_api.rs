@@ -208,6 +208,144 @@ impl MeteoFranceAuth {
 /// Wrapper `Arc` pour partager `MeteoFranceAuth` entre tâches tokio.
 pub type SharedAuth = Arc<MeteoFranceAuth>;
 
+// ---------------------------------------------------------------------------
+// AromeOmClient
+// ---------------------------------------------------------------------------
+
+use bytes::Bytes;
+
+const MAX_TRANSIENT_RETRIES: u32 = 3;
+const MAX_RATELIMIT_RETRIES: u32 = 3;
+
+/// Identifiant API d'un territoire AROME-OM. La valeur exacte du `model_id`
+/// (utilisée dans le path URL) est à confirmer via Task 0. `Reunion` correspond
+/// vraisemblablement à "AROME-INDIEN" côté API Météo-France.
+#[derive(Debug, Clone, Copy)]
+pub enum AromeOmTerritory {
+    Reunion,
+}
+
+impl AromeOmTerritory {
+    pub fn model_id(&self) -> &'static str {
+        match self {
+            // TODO(task-0): confirmer le nom exact ("AROME-OM-REUN" ?
+            // "AROME-OUTREMER-INDIEN" ?) sur une requête réelle.
+            AromeOmTerritory::Reunion => "AROME-INDIEN",
+        }
+    }
+    pub fn grid_id(&self) -> &'static str {
+        // 0.025° pour tous les territoires AROME-OM d'après la doc.
+        "0.025"
+    }
+}
+
+pub struct AromeOmClient {
+    base: String,
+    api_namespace: String,
+    auth: SharedAuth,
+    http: reqwest::Client,
+}
+
+impl AromeOmClient {
+    pub fn new(auth: SharedAuth) -> Self {
+        let http = reqwest::Client::builder()
+            .user_agent("infoclimat-pipelines/0.1")
+            .timeout(std::time::Duration::from_secs(180))
+            .build()
+            .expect("reqwest client build cannot fail with rustls feature enabled");
+        Self {
+            base: PUBLIC_API_BASE.to_string(),
+            // TODO(task-0): confirmer le namespace exact (DPPaquetAROME-OM ou alternative).
+            api_namespace: "DPPaquetAROME-OM".to_string(),
+            auth,
+            http,
+        }
+    }
+
+    /// Download GRIB2 d'un (territoire, package, run, window). Gère retry,
+    /// refresh-token-on-401, et rate limiting.
+    pub async fn fetch_package(
+        &self,
+        territory: AromeOmTerritory,
+        package: &str,
+        reference_time: DateTime<Utc>,
+        time_window: &str,
+    ) -> Result<Bytes, MeteoFranceError> {
+        let url = build_product_url(
+            &self.base,
+            &self.api_namespace,
+            territory.model_id(),
+            territory.grid_id(),
+            package,
+            reference_time,
+            time_window,
+        );
+
+        let mut token = self.auth.get_token().await?;
+        let mut transient_attempt = 0u32;
+        let mut ratelimit_attempt = 0u32;
+        let mut already_refreshed_for_401 = false;
+
+        loop {
+            let resp = self
+                .http
+                .get(&url)
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await?;
+            let status = resp.status().as_u16();
+            let retry_after = resp
+                .headers()
+                .get("Retry-After")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let action = classify_response(status, retry_after.as_deref(), transient_attempt);
+
+            match action {
+                RetryAction::Ok => {
+                    let body = resp.bytes().await?;
+                    return Ok(body);
+                }
+                RetryAction::RefreshTokenAndRetry => {
+                    if already_refreshed_for_401 {
+                        let body = resp.text().await.unwrap_or_default();
+                        return Err(MeteoFranceError::Auth(format!("repeated 401: {body}")));
+                    }
+                    already_refreshed_for_401 = true;
+                    token = self.auth.force_refresh().await?;
+                }
+                RetryAction::BackoffAndRetry { delay_s } => {
+                    if ratelimit_attempt >= MAX_RATELIMIT_RETRIES {
+                        return Err(MeteoFranceError::RateLimited {
+                            retry_after_s: Some(delay_s),
+                        });
+                    }
+                    tracing::warn!(delay_s, "rate limited — backing off");
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_s)).await;
+                    ratelimit_attempt += 1;
+                }
+                RetryAction::TransientRetry { attempt } => {
+                    if attempt >= MAX_TRANSIENT_RETRIES {
+                        let body = resp.text().await.unwrap_or_default();
+                        return Err(MeteoFranceError::Http { status, body });
+                    }
+                    let secs = backoff_seconds(attempt);
+                    tracing::warn!(status, attempt, secs, "transient error — retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    transient_attempt += 1;
+                }
+                RetryAction::Fail(msg) => {
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(MeteoFranceError::Http {
+                        status,
+                        body: format!("{msg}: {body}"),
+                    });
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
