@@ -65,6 +65,18 @@ def decode(grib_path: str, shortnames: List[str], out_dir: str) -> int:
 
         for step in steps:
             sub = var.sel(step=step) if step is not None and "step" in var.dims else var
+            # Convention Open-Meteo : row 0 = sud (latMin du Domain côté client).
+            # Les GRIB Météo-France stockent du nord au sud (latitude descendante),
+            # donc on flip si nécessaire pour que le client rende les pixels au
+            # bon endroit. Sans flip, le client lit la mauvaise zone (le point
+            # "Réunion" pointe en réalité vers les Comores → temp océanique
+            # quasi uniforme ~27°C au lieu de la vraie variation 15-28°C).
+            if (
+                "latitude" in sub.dims
+                and len(sub.latitude) >= 2
+                and float(sub.latitude.values[0]) > float(sub.latitude.values[-1])
+            ):
+                sub = sub.isel(latitude=slice(None, None, -1))
             lead_h = int(step / 1_000_000_000 / 3600) if step is not None else 0
             out_path = os.path.join(out_dir, f"{sn}_{lead_h:03d}h.nc")
             sub.to_netcdf(out_path)
