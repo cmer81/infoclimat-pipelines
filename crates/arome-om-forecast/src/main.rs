@@ -3,13 +3,14 @@
 //! Étapes (cf. `docs/superpowers/specs/2026-05-28-arome-om-forecast-design.md`):
 //!  1. Détermine le run target (`floor_6h(now - publication_delay)` ou `--run`).
 //!  2. Build la liste des leadtimes 0..=horizon.
-//!  3. Pour chaque leadtime, parallel buffer_unordered :
-//!     a. Pour chaque package : download GRIB2 + decode → slices.
-//!     b. Collecte tous les slices du leadtime.
-//!     c. Écrit UN OMfile multi-variable : `{run_dir}/{ISO_valid_time}.om`.
-//!     d. Upload R2 : `{r2_prefix}/Y/M/D/HHMMZ/{ISO_valid_time}.om`.
-//!  4. Update metadata.
-//!  5. GC des runs trop vieux.
+//!  3. Décode en parallèle (`buffered`, ordre préservé) :
+//!     a. Pour chaque leadtime : télécharge tous les packages, décode → slices.
+//!  4. Consomme séquentiellement (ordre croissant leadtime) :
+//!     a. Injecte `precipitation_sum` (accumulateur cumulatif depuis H0).
+//!     b. Écrit UN OMfile multi-variable : `{run_dir}/{ISO_valid_time}.om`.
+//!     c. Upload R2 : `{r2_prefix}/Y/M/D/HHMMZ/{ISO_valid_time}.om`.
+//!  5. Update metadata.
+//!  6. GC des runs trop vieux.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -142,58 +143,70 @@ async fn main() -> Result<()> {
     let r2_prefix = args.r2_prefix.clone();
     let script_path = Arc::new(args.script_path.clone());
 
-    // Counters partagés : (written, failures).
-    let counters = Arc::new(tokio::sync::Mutex::new((0u32, 0u32)));
+    let run_dir = work_dir.join(format!("{}Z", run.format("%Y%m%dT%H%M")));
+    std::fs::create_dir_all(&run_dir).context("creating run_dir")?;
 
-    stream::iter(leadtimes.into_iter().map(|leadtime| {
+    // Décodage parallèle livré DANS L'ORDRE croissant des leadtimes (`buffered`),
+    // condition nécessaire pour entretenir l'accumulateur de cumul séquentiel.
+    let decoded = stream::iter(leadtimes.into_iter().map(|leadtime| {
         let mf = mf.clone();
-        let r2 = r2.clone();
         let work_dir = work_dir.clone();
-        let r2_prefix = r2_prefix.clone();
         let script_path = script_path.clone();
         let packages = packages.clone();
-        let counters = counters.clone();
         async move {
-            match process_leadtime(
-                &mf,
-                r2.as_deref(),
-                territory,
-                &packages,
-                leadtime,
-                run,
-                &grid,
-                &work_dir,
-                &r2_prefix,
-                &script_path,
-            )
-            .await
-            {
-                Ok(true) => {
-                    let mut c = counters.lock().await;
-                    c.0 += 1;
-                    tracing::info!(leadtime, "leadtime OK");
-                }
-                Ok(false) => {
-                    // 0 slices decoded (e.g. all packages 404) — skip silently.
-                    tracing::warn!(leadtime, "leadtime skipped (0 slices)");
-                }
-                Err(e) => {
-                    let mut c = counters.lock().await;
-                    c.1 += 1;
-                    tracing::error!(leadtime, error = %e, "leadtime FAILED");
-                    if matches!(e.downcast_ref::<MeteoFranceError>(), Some(MeteoFranceError::Auth(_))) {
-                        tracing::error!("auth error — aborting");
-                        std::process::exit(2);
+            let res =
+                decode_leadtime(&mf, territory, &packages, leadtime, run, &ReunionGrid, &work_dir, &script_path)
+                    .await;
+            (leadtime, res)
+        }
+    }))
+    .buffered(args.concurrency);
+    tokio::pin!(decoded);
+
+    // Accumulateur de cumul : zéros au départ, réutilisé d'un leadtime à l'autre.
+    let mut acc = ndarray::Array2::<f32>::zeros((grid.ny(), grid.nx()));
+    let mut written = 0u32;
+    let mut failures = 0u32;
+
+    while let Some((leadtime, res)) = decoded.next().await {
+        match res {
+            Ok(slices) if slices.is_empty() => {
+                tracing::warn!(leadtime, "leadtime skipped (0 slices)");
+            }
+            Ok(mut slices) => {
+                arome_om_forecast::cumul::accumulate_and_inject(&mut slices, &mut acc, leadtime);
+                match write_and_upload_timestep(
+                    slices,
+                    run,
+                    leadtime,
+                    &run_dir,
+                    r2.as_deref(),
+                    &r2_prefix,
+                    &grid,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        written += 1;
+                        tracing::info!(leadtime, "leadtime OK");
+                    }
+                    Err(e) => {
+                        failures += 1;
+                        tracing::error!(leadtime, error = %e, "write/upload FAILED");
                     }
                 }
             }
+            Err(e) => {
+                failures += 1;
+                tracing::error!(leadtime, error = %e, "leadtime FAILED");
+                if matches!(e.downcast_ref::<MeteoFranceError>(), Some(MeteoFranceError::Auth(_))) {
+                    tracing::error!("auth error — aborting");
+                    std::process::exit(2);
+                }
+            }
         }
-    }))
-    .buffer_unordered(args.concurrency)
-    .collect::<Vec<_>>()
-    .await;
+    }
 
-    let (written, failures) = *counters.lock().await;
     tracing::info!(written, failures, "all leadtimes done");
 
     // Metadata + GC seulement si au moins un fichier a été écrit et qu'on uploade.
@@ -201,11 +214,15 @@ async fn main() -> Result<()> {
         if written > 0 {
             let pkg_ids: std::collections::HashSet<&'static str> =
                 packages.iter().map(|p| p.as_api_id()).collect();
-            let var_names: Vec<&'static str> = VARIABLES
+            let mut var_names: Vec<&'static str> = VARIABLES
                 .iter()
                 .filter(|v| pkg_ids.contains(v.package))
                 .map(|v| v.om_name)
                 .collect();
+            // Annonce la variable dérivée dès que la précip est présente.
+            if var_names.contains(&arome_om_forecast::cumul::PRECIP_OM_NAME) {
+                var_names.push(arome_om_forecast::cumul::DERIVED_PRECIP_SUM);
+            }
             if let Err(e) = update_metadata(r2, run, &var_names).await {
                 tracing::error!(error = %e, "metadata update failed");
             }
@@ -221,28 +238,25 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Traite un leadtime complet : télécharge tous les packages, décode, collecte
-/// les slices, et écrit un seul OMfile multi-variable.
+/// Décode un leadtime complet : télécharge tous les packages, décode, et
+/// retourne les slices. N'écrit PAS l'OMfile (l'écriture est séquentielle dans
+/// le consommateur, pour entretenir l'accumulateur de cumul).
 ///
-/// Retourne `Ok(true)` si le fichier a été écrit, `Ok(false)` si 0 slices (skip).
+/// Retourne un vecteur vide si 0 slices décodées (skip).
 #[expect(clippy::too_many_arguments, reason = "pipeline context struct not yet introduced")]
-async fn process_leadtime(
+async fn decode_leadtime(
     mf: &AromeOmClient,
-    r2: Option<&R2Client>,
     territory: AromeOmTerritory,
     packages: &[Package],
     leadtime: u32,
     run: DateTime<Utc>,
     grid: &ReunionGrid,
     work_dir: &std::path::Path,
-    r2_prefix: &str,
     script_path: &std::path::Path,
-) -> Result<bool> {
+) -> Result<Vec<DecodedSlice>> {
     let run_dir = work_dir.join(format!("{}Z", run.format("%Y%m%dT%H%M")));
     std::fs::create_dir_all(&run_dir)?;
 
-    // Télécharge et décode chaque package séquentiellement au sein du leadtime
-    // (garder simple ; la parallélisation est au niveau des leadtimes).
     let mut all_slices: Vec<DecodedSlice> = Vec::new();
     for pkg in packages {
         let grib_path = run_dir.join(format!("{pkg}_{leadtime:03}h.grib2"));
@@ -268,12 +282,7 @@ async fn process_leadtime(
         all_slices.extend(slices);
     }
 
-    if all_slices.is_empty() {
-        return Ok(false);
-    }
-
-    write_and_upload_timestep(all_slices, run, leadtime, &run_dir, r2, r2_prefix, grid).await?;
-    Ok(true)
+    Ok(all_slices)
 }
 
 /// Calcule le `valid_time` (run + leadtime), nomme le fichier `{YYYY-MM-DDTHHMM}.om`,

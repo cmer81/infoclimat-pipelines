@@ -86,7 +86,7 @@ Fenêtres :
 ### Pipeline `arome-om-forecast` (AROME-OM Réunion-Mayotte, prévision brute)
 
 Publie sur R2 les OMfiles AROME-OM Réunion-Mayotte / Océan Indien (prévision brute,
-**11 variables surface**, horizon **48 h** par pas horaire). Consommé tel quel par
+**11 variables surface + `precipitation_sum` dérivée**, horizon **48 h** par pas horaire). Consommé tel quel par
 le client `maps/` sous le domaine `arome_om_reunion`.
 
 Couvre la grille AROME-OM-INDIEN native (**1395 × 899 à 0,025°**, ~2,7 km de
@@ -99,6 +99,7 @@ l'Inde — pas juste les deux îles malgré le nom officiel.
 |---|---|
 | SP1 (7) | `temperature_2m`, `relative_humidity_2m`, `wind_u_component_10m`, `wind_v_component_10m`, `wind_gusts_10m`, `pressure_msl`, `precipitation` |
 | SP2 (4) | `dew_point_2m`, `cloud_cover_low`, `cloud_cover_mid`, `cloud_cover_high` |
+| Dérivée | `precipitation_sum` : cumul de précipitation depuis le début du run, croissant à chaque échéance (H0 = 0, NaN propagé) |
 
 SP3 est exclu du MVP (flux énergétiques de surface peu pertinents pour une carte
 grand public). `parse_packages` rejette `SP3` au startup pour éviter une boucle

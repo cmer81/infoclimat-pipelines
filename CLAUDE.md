@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Workspace Rust (édition 2024, rust-version 1.85) de **pipelines batch** qui précalculent deux familles de produits météo et publient des OMfiles spatiaux dans un bucket Cloudflare R2 :
 
 1. **Anomalies de température** ARPEGE Europe : `température(jour J) − normale_climatique(jour-de-l'année)`, sur la grille ARPEGE Europe (0.1°, 521×741, °C).
-2. **Prévisions brutes AROME-OM Réunion-Mayotte** : 11 variables surface (T2m, RH, vent u/v, rafales, MSLP, précip, point de rosée, nuages bas/moyen/haut), grille AROME-OM-INDIEN (0.025°, 1395×899), horizon 48 h par pas horaire.
+2. **Prévisions brutes AROME-OM Réunion-Mayotte** : 11 variables surface (T2m, RH, vent u/v, rafales, MSLP, précip, point de rosée, nuages bas/moyen/haut) + variable dérivée `precipitation_sum` (cumul depuis le début du run), grille AROME-OM-INDIEN (0.025°, 1395×899), horizon 48 h par pas horaire.
 
 Le client SvelteKit `maps/` (repo voisin, voir `../CLAUDE.md`) consomme les deux directement via accès public R2, sans auth.
 
@@ -27,6 +27,7 @@ AROME-OM (MF API GRIB2) ─► arome-om-forecast (cron 4×/j) ─► OMfiles mul
 ```
 
 - **`crates/core`** (`pipeline-core`) — tout le code réutilisable. Modules :
+  - `accumulation` — `accumulate_into` (cumul roulant NaN-aware).
   - `grid` — grilles `ArpegeEuropeGrid` + `ReunionGrid` (2 impl du trait `Grid`), bbox ERA5.
   - `regrid` — bilinéaire ERA5 → ARPEGE.
   - `climatology` — cache des 366 normales + `day_of_year_index`.
@@ -40,7 +41,7 @@ AROME-OM (MF API GRIB2) ─► arome-om-forecast (cron 4×/j) ─► OMfiles mul
 - **`temperature-anomaly-climatology`** — one-shot `workflow_dispatch`. Lit du NetCDF ERA5, construit les 366 normales lissées 15 j. Seul crate qui dépend de `netcdf`.
 - **`temperature-anomaly-observed`** — cron quotidien. Re-télécharge `--refresh-days` jours via CDS (appelle `scripts/download_era5.py`), GC au-delà de `--days-back`.
 - **`temperature-anomaly-forecast`** — cron 4×/jour. Fetch les OMfiles horaires ARPEGE d'Open-Meteo, moyenne journalière, pas de CDS, pas de GC (fichiers écrasés en place).
-- **`arome-om-forecast`** — cron 4×/jour (`0 1,7,13,19 * * *` UTC). Auth OAuth2 contre `portail-api.meteofrance.fr`, fetch GRIB2 multi-messages (49 leadtimes × 2 packages = 98 fichiers par run), décodage via helper Python (`scripts/decode_arome_om_grib.py` → cfgrib/xarray), regroupement par leadtime, écriture d'**un OMfile multi-variables par timestep**, upload R2, GC des runs > `keep_runs_back × 6h`.
+- **`arome-om-forecast`** — cron 4×/jour (`0 1,7,13,19 * * *` UTC). Auth OAuth2 contre `portail-api.meteofrance.fr`, fetch GRIB2 multi-messages (49 leadtimes × 2 packages = 98 fichiers par run), décodage via helper Python (`scripts/decode_arome_om_grib.py` → cfgrib/xarray), regroupement par leadtime, écriture d'**un OMfile multi-variables par timestep**, **incluant la variable dérivée `precipitation_sum`** (cumul de précip depuis le début du run, NaN propagé), upload R2, GC des runs > `keep_runs_back × 6h`.
 
 Les binaires sont fins : l'orchestration vit dans `main.rs` (chacun a un doc-comment d'entête décrivant ses étapes), la logique réutilisable dans `core`. Pour ajouter un pipeline (ex. précipitations, ou autres territoires DOM-TOM), réutiliser `core` et calquer un binaire existant.
 
@@ -95,6 +96,7 @@ Secrets attendus :
 - **Flip latitude N→S dans le décodeur Python** : les GRIB AROME-OM stockent les rows du nord vers le sud (`latitudeOfFirstGridPoint = -3.45°`, `latitudeOfLastGridPoint = -25.9°`) alors qu'Open-Meteo / le trait `Grid` attendent `row 0 = latMin` (sud). Le helper `scripts/decode_arome_om_grib.py` détecte l'orientation et flippe avec `sub.isel(latitude=slice(None, None, -1))`. Sans ce flip, le client maps/ lit la mauvaise zone (Saint-Denis à -21° pointait sur des pixels océaniques uniformes ~-8°S côté Comores → tout uniforme à ~27 °C). Ne pas retirer.
 - **Layout R2 AROME-OM** : `data_spatial/arome_om_reunion/{Y}/{M}/{D}/{HHMM}Z/{YYYY-MM-DDTHHMM}.om` — un fichier multi-variables par leadtime, nommé par son valid_time. Le `parse_run_key` legacy (qui matchait `{var}_{leadtime}h.om`) a été remplacé par un parser qui lit le valid_time directement du nom de fichier via `chrono::NaiveDateTime::parse_from_str(stem, "%Y-%m-%dT%H%M")`.
 - **Variables cumulatives à leadtime 0** : `max_i10fg`, `tp`, `ssrd`, `tsnowp`, `tgrp` ont un `stepRange = 0-1` (intégrée H0→H1) et n'existent **pas** à `time=000H`. Le décodeur Python le détecte (`len(ds.data_vars) == 0`) et continue avec un log INFO ; ne pas reclassifier ça en erreur dure.
+- **`precipitation_sum` (cumul AROME-OM)** : variable *dérivée* (pas dans le registry `VARIABLES`), calculée par accumulation séquentielle de `precipitation` depuis H0 du run via `pipeline_core::accumulation::accumulate_into`. Pour entretenir l'accumulateur, le flux décode les leadtimes en parallèle mais les **écrit séquentiellement dans l'ordre croissant** (`buffered`, pas `buffer_unordered`). Sémantique : cumul **relatif au run** (pas calendaire), H0 = 0 partout, NaN propagé (une heure trouée tue le pixel pour la suite). Ne pas réintroduire `buffer_unordered` sur l'écriture — ça casserait le cumul.
 - **`netcdf` feature `static`** : compile HDF5/libnetcdf depuis les sources (cmake requis, ~5 min au 1er build). Évite `libnetcdf-dev`/`libhdf5-dev` sur les machines sans HDF5 système. Utilisé par `temperature-anomaly-climatology` (lecture ERA5) et `arome-om-forecast` (lecture des NetCDF intermédiaires produits par cfgrib).
 
 ## Conventions
