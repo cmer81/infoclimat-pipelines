@@ -83,6 +83,20 @@ Fenêtres :
 - **forecast** : J+0→J+4 réécrits à chaque run ; GC des fichiers dont la date est
   passée (sinon un J+0 d'hier traîne et est mal routé par le client).
 
+### Pipeline `arome-om-forecast`
+
+En plus des deps déjà documentées :
+
+```bash
+# Système (Debian-likes)
+sudo apt install libeccodes0 libeccodes-tools
+
+# Python (venv projet)
+pip install cfgrib xarray netCDF4
+```
+
+Le binaire appelle `python3` du PATH (typiquement via `source venv/bin/activate`) sur `scripts/decode_arome_om_grib.py` pour décoder le GRIB2.
+
 ---
 
 ## Structure
