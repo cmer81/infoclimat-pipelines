@@ -1,0 +1,33 @@
+[package]
+name = "arome-om-forecast"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "arome_om_forecast"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arome-om-forecast"
+path = "src/main.rs"
+
+[dependencies]
+pipeline-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+ndarray.workspace = true
+netcdf.workspace = true
+reqwest.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true
+dotenvy.workspace = true
+omfiles.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true

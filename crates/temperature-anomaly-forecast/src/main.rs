@@ -25,7 +25,7 @@ use omfiles::{
 use pipeline_core::anomaly::subtract_with_nan;
 use pipeline_core::climatology::{ClimatologyCache, day_of_year_index};
 use pipeline_core::grid::{ArpegeEuropeGrid, Grid};
-use pipeline_core::omfile_io::{OmfileMetadata, write_spatial_omfile};
+use pipeline_core::omfile_io::{ANOMALY_VARIABLE, OmfileMetadata, write_spatial_omfile};
 use pipeline_core::r2::{R2Client, R2Config};
 
 use temperature_anomaly_forecast::openmeteo::OpenMeteoClient;
@@ -272,7 +272,7 @@ async fn process_day(
             "hours_available": hours.len(),
         }),
     };
-    write_spatial_omfile(&local_path, &anomaly, dst_grid, &meta)?;
+    write_spatial_omfile(&local_path, ANOMALY_VARIABLE, &anomaly, dst_grid, &meta)?;
 
     if let Some(r2) = r2 {
         let key = format!("{}/{}", target_prefix.trim_end_matches('/'), filename);

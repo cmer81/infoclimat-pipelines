@@ -5,6 +5,7 @@ members = [
     "crates/temperature-anomaly-climatology",
     "crates/temperature-anomaly-observed",
     "crates/temperature-anomaly-forecast",
+    "crates/arome-om-forecast",
 ]
 
 [workspace.package]
@@ -57,3 +58,6 @@ dotenvy = "0.15"
 # it via apt; locally on Debian-likes without libhdf5-dev installed it
 # would otherwise fail at build time).
 netcdf = { version = "0.10", features = ["static"] }
+
+# Temp files (used by arome-om-forecast for GRIB decode staging)
+tempfile = "3"
