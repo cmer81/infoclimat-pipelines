@@ -9,6 +9,7 @@
 //! - [`planning`] — construction du plan de download (Package × TimeWindow).
 //! - [`variables`] — registry statique des variables AROME-OM exposées.
 
+pub mod cumul;
 pub mod grib_decoder;
 pub mod planning;
 pub mod variables;

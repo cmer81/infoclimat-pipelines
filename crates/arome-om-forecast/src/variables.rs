@@ -23,6 +23,10 @@ pub struct VariableEntry {
     pub unit_conversion: UnitConversion,
     /// Package AROME-OM dans lequel la variable se trouve.
     pub package: &'static str,
+    /// `scale_factor` d'encodage OMfile (`i16`, valeur max = `32767 / scale_factor`).
+    /// Choisi par plage physique : 100 pour les petites grandeurs (T°, RH, vent…),
+    /// 20 pour la pression (~1013 hPa), 10 pour la précip horaire (jusqu'à ~3276 mm).
+    pub scale_factor: f32,
 }
 
 /// Inventaire MVP : SP1 (8 vars) + SP2 (4 vars). ShortNames et répartition par
@@ -31,22 +35,35 @@ pub struct VariableEntry {
 /// retiré parce que le client `maps/` le dérive depuis u/v.
 pub const VARIABLES: &[VariableEntry] = &[
     // SP1 (8 vars) — paramètres courants surface
-    VariableEntry { grib_short_name: "2t",        om_name: "temperature_2m",       unit_conversion: UnitConversion::KelvinToCelsius,     package: "SP1" },
-    VariableEntry { grib_short_name: "2r",        om_name: "relative_humidity_2m", unit_conversion: UnitConversion::None,                package: "SP1" },
+    VariableEntry { grib_short_name: "2t",        om_name: "temperature_2m",       unit_conversion: UnitConversion::KelvinToCelsius,     package: "SP1", scale_factor: 100.0 },
+    VariableEntry { grib_short_name: "2r",        om_name: "relative_humidity_2m", unit_conversion: UnitConversion::None,                package: "SP1", scale_factor: 100.0 },
     // Naming aligné sur la convention Open-Meteo (variableOptions du package
     // @openmeteo/weather-map-layer) : `wind_u_component_10m`, pas `wind_u_10m`.
     // Le client maps/ dérive la vitesse depuis u/v → pas besoin de la publier.
-    VariableEntry { grib_short_name: "10u",       om_name: "wind_u_component_10m", unit_conversion: UnitConversion::None,                package: "SP1" },
-    VariableEntry { grib_short_name: "10v",       om_name: "wind_v_component_10m", unit_conversion: UnitConversion::None,                package: "SP1" },
-    VariableEntry { grib_short_name: "max_i10fg", om_name: "wind_gusts_10m",       unit_conversion: UnitConversion::None,                package: "SP1" },
-    VariableEntry { grib_short_name: "prmsl",     om_name: "pressure_msl",         unit_conversion: UnitConversion::PascalToHectopascal, package: "SP1" },
-    VariableEntry { grib_short_name: "tp",        om_name: "precipitation",        unit_conversion: UnitConversion::KgPerM2ToMm,         package: "SP1" },
+    VariableEntry { grib_short_name: "10u",       om_name: "wind_u_component_10m", unit_conversion: UnitConversion::None,                package: "SP1", scale_factor: 100.0 },
+    VariableEntry { grib_short_name: "10v",       om_name: "wind_v_component_10m", unit_conversion: UnitConversion::None,                package: "SP1", scale_factor: 100.0 },
+    VariableEntry { grib_short_name: "max_i10fg", om_name: "wind_gusts_10m",       unit_conversion: UnitConversion::None,                package: "SP1", scale_factor: 100.0 },
+    // Pression ~1013 hPa : scale 20 → max 1638 hPa (scale 100 déborderait l'i16).
+    VariableEntry { grib_short_name: "prmsl",     om_name: "pressure_msl",         unit_conversion: UnitConversion::PascalToHectopascal, package: "SP1", scale_factor: 20.0 },
+    // Précip horaire (mm) : scale 10 → max 3276 mm (scale 100 plafonnerait à 327).
+    VariableEntry { grib_short_name: "tp",        om_name: "precipitation",        unit_conversion: UnitConversion::KgPerM2ToMm,         package: "SP1", scale_factor: 10.0 },
     // SP2 (4 vars) — additionnels surface
-    VariableEntry { grib_short_name: "2d",        om_name: "dew_point_2m",         unit_conversion: UnitConversion::KelvinToCelsius,     package: "SP2" },
-    VariableEntry { grib_short_name: "lcc",       om_name: "cloud_cover_low",      unit_conversion: UnitConversion::None,                package: "SP2" },
-    VariableEntry { grib_short_name: "mcc",       om_name: "cloud_cover_mid",      unit_conversion: UnitConversion::None,                package: "SP2" },
-    VariableEntry { grib_short_name: "hcc",       om_name: "cloud_cover_high",     unit_conversion: UnitConversion::None,                package: "SP2" },
+    VariableEntry { grib_short_name: "2d",        om_name: "dew_point_2m",         unit_conversion: UnitConversion::KelvinToCelsius,     package: "SP2", scale_factor: 100.0 },
+    VariableEntry { grib_short_name: "lcc",       om_name: "cloud_cover_low",      unit_conversion: UnitConversion::None,                package: "SP2", scale_factor: 100.0 },
+    VariableEntry { grib_short_name: "mcc",       om_name: "cloud_cover_mid",      unit_conversion: UnitConversion::None,                package: "SP2", scale_factor: 100.0 },
+    VariableEntry { grib_short_name: "hcc",       om_name: "cloud_cover_high",     unit_conversion: UnitConversion::None,                package: "SP2", scale_factor: 100.0 },
 ];
+
+/// `scale_factor` d'encodage pour une variable de sortie (`om_name`), y compris
+/// la variable dérivée `precipitation_sum`. Défaut 100 si inconnue.
+pub fn scale_factor_for(om_name: &str) -> f32 {
+    // Cumul de précip depuis le run : peut dépasser 3000 mm sur un épisode
+    // cyclonique réunionnais → scale 5 (max 6553 mm, résolution 0.2 mm).
+    if om_name == crate::cumul::DERIVED_PRECIP_SUM {
+        return 5.0;
+    }
+    lookup_by_om(om_name).map_or(100.0, |v| v.scale_factor)
+}
 
 pub fn variables_for_package(pkg: &str) -> impl Iterator<Item = &'static VariableEntry> {
     VARIABLES.iter().filter(move |v| v.package == pkg)

@@ -12,3 +12,7 @@ climato/
 
 # perso (permissions locales Claude Code)
 .claude/settings.local.json
+
+# Pipeline work dirs (OMfiles + NetCDF intermédiaires produits par les runs)
+work/
+work_*/
