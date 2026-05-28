@@ -27,14 +27,17 @@ pub struct VariableEntry {
 
 /// Inventaire MVP : SP1 (8 vars) + SP2 (4 vars). ShortNames et répartition par
 /// package issus de l'inventaire réel de l'API AROME-OM (Task 0, 2026-05-28).
-/// SP3 exclu du MVP.
+/// SP3 exclu du MVP. Total 11 vars (SP1: 7, SP2: 4) — `wind_speed_10m`
+/// retiré parce que le client `maps/` le dérive depuis u/v.
 pub const VARIABLES: &[VariableEntry] = &[
     // SP1 (8 vars) — paramètres courants surface
     VariableEntry { grib_short_name: "2t",        om_name: "temperature_2m",       unit_conversion: UnitConversion::KelvinToCelsius,     package: "SP1" },
     VariableEntry { grib_short_name: "2r",        om_name: "relative_humidity_2m", unit_conversion: UnitConversion::None,                package: "SP1" },
-    VariableEntry { grib_short_name: "10u",       om_name: "wind_u_10m",           unit_conversion: UnitConversion::None,                package: "SP1" },
-    VariableEntry { grib_short_name: "10v",       om_name: "wind_v_10m",           unit_conversion: UnitConversion::None,                package: "SP1" },
-    VariableEntry { grib_short_name: "10si",      om_name: "wind_speed_10m",       unit_conversion: UnitConversion::None,                package: "SP1" },
+    // Naming aligné sur la convention Open-Meteo (variableOptions du package
+    // @openmeteo/weather-map-layer) : `wind_u_component_10m`, pas `wind_u_10m`.
+    // Le client maps/ dérive la vitesse depuis u/v → pas besoin de la publier.
+    VariableEntry { grib_short_name: "10u",       om_name: "wind_u_component_10m", unit_conversion: UnitConversion::None,                package: "SP1" },
+    VariableEntry { grib_short_name: "10v",       om_name: "wind_v_component_10m", unit_conversion: UnitConversion::None,                package: "SP1" },
     VariableEntry { grib_short_name: "max_i10fg", om_name: "wind_gusts_10m",       unit_conversion: UnitConversion::None,                package: "SP1" },
     VariableEntry { grib_short_name: "prmsl",     om_name: "pressure_msl",         unit_conversion: UnitConversion::PascalToHectopascal, package: "SP1" },
     VariableEntry { grib_short_name: "tp",        om_name: "precipitation",        unit_conversion: UnitConversion::KgPerM2ToMm,         package: "SP1" },
