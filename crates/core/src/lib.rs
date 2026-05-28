@@ -1,3 +1,4 @@
+pub mod accumulation;
 pub mod anomaly;
 pub mod anomaly_metadata;
 pub mod arome_om_metadata;
