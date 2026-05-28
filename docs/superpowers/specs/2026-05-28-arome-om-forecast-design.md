@@ -1,7 +1,7 @@
 # AROME-OM Forecast Pipeline — Design Spec
 
 **Date :** 2026-05-28
-**Auteur :** Cédric (cedric@libeo.io) + brainstorming Claude
+**Auteur :** Cédric Mercier (cmer@cmer.fr) + brainstorming Claude
 **Statut :** Brouillon — en attente review user
 
 ## Contexte et motivation
