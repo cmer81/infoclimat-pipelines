@@ -167,9 +167,14 @@ pour un run complet (49 leadtimes × ~10 MB par OMfile multi-var) en
 
 #### Cron production
 
-`.github/workflows/arome-om-forecast.yml`, 4 runs/jour à 01/07/13/19 UTC, aligné
-sur la publication des runs AROME-OM (00/06/12/18 UTC + ~6 h de latence
-publication MF).
+`.github/workflows/arome-om-forecast.yml`, 4 runs/jour à 01/07/13/19 UTC. La
+sélection du run cible est `floor_6h(now − 12 h)` (`PUBLICATION_DELAY_H = 12`),
+ce qui vise un run d'âge **~13 h**. Météo-France publie les échéances
+**progressivement** (les plus lointaines en dernier, délai > 7 h et variable) :
+à ~7 h après le run l'échéance 48 h n'est pas encore servie. Le pipeline tolère
+en plus jusqu'à 6 échéances manquantes **en fin d'horizon**
+(`tail_failures_are_tolerable`) sans échouer ; un trou intérieur ou un run quasi
+vide reste un échec dur.
 
 #### Secrets GitHub Actions requis
 
