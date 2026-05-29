@@ -37,6 +37,46 @@ pub fn build_plan(horizon_h: u32, packages: &[Package]) -> Vec<(Package, u32)> {
     plan
 }
 
+/// Nombre maximum d'échéances **de queue** manquantes toléré avant de
+/// considérer le run comme un échec dur.
+///
+/// Météo-France publie les échéances d'AROME-OM progressivement — les plus
+/// lointaines en dernier, avec un délai de mise à disposition supérieur à
+/// `PUBLICATION_DELAY_H` et variable d'un run à l'autre. Quelques échéances de
+/// queue encore absentes au moment du fetch sont donc normales et ne doivent
+/// pas faire échouer le pipeline tant que le reste de l'horizon est livré.
+/// Au-delà de ce seuil, le run est vraisemblablement cassé/incomplet (ex. la
+/// publication n'a quasiment pas commencé) → on échoue pour alerter.
+pub const MAX_TAIL_FAILURES_TOLERATED: u32 = 6;
+
+/// Décide si un run partiellement échoué doit être traité comme un succès.
+///
+/// `max_written_leadtime` = plus grand leadtime écrit avec succès (`None` si
+/// aucun fichier n'a été produit). `failed_leadtimes` = leadtimes ayant échoué
+/// (fetch/decode/write). `max_tail` = nombre d'échecs de queue toléré
+/// (typiquement [`MAX_TAIL_FAILURES_TOLERATED`]).
+///
+/// Règle : on tolère uniquement des échecs **de queue contiguë** — chaque
+/// leadtime échoué est strictement supérieur au plus grand leadtime écrit — et
+/// en nombre ≤ `max_tail`. Un trou « intérieur » (échéance manquante avant la
+/// dernière écrite) ou un nombre d'échecs trop élevé reste un échec dur.
+pub fn tail_failures_are_tolerable(
+    max_written_leadtime: Option<u32>,
+    failed_leadtimes: &[u32],
+    max_tail: u32,
+) -> bool {
+    let Some(max_ok) = max_written_leadtime else {
+        return false; // rien écrit → échec dur
+    };
+    if failed_leadtimes.is_empty() {
+        return true;
+    }
+    if failed_leadtimes.len() as u32 > max_tail {
+        return false;
+    }
+    failed_leadtimes.iter().all(|&lead| lead > max_ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +117,40 @@ mod tests {
         let plan = build_plan(0, &[Package::Sp1]);
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].1, 0);
+    }
+
+    #[test]
+    fn tail_tolerable_when_no_failures() {
+        assert!(tail_failures_are_tolerable(Some(48), &[], 6));
+    }
+
+    #[test]
+    fn tail_tolerable_when_only_last_leadtime_missing() {
+        // Écrit 0..=47, échéance 48 absente (cas réel : publication MF en retard).
+        assert!(tail_failures_are_tolerable(Some(47), &[48], 6));
+    }
+
+    #[test]
+    fn tail_tolerable_for_a_few_contiguous_tail_leadtimes() {
+        // Écrit 0..=45, échéances 46/47/48 absentes.
+        assert!(tail_failures_are_tolerable(Some(45), &[46, 47, 48], 6));
+    }
+
+    #[test]
+    fn tail_not_tolerable_for_interior_hole() {
+        // Écrit jusqu'à 48 mais 47 manque → trou intérieur, pas une queue.
+        assert!(!tail_failures_are_tolerable(Some(48), &[47], 6));
+    }
+
+    #[test]
+    fn tail_not_tolerable_when_too_many_missing() {
+        // Run quasi vide (seul H0 écrit, 1..=48 absents) → dépasse le seuil.
+        let failed: Vec<u32> = (1..=48).collect();
+        assert!(!tail_failures_are_tolerable(Some(0), &failed, 6));
+    }
+
+    #[test]
+    fn tail_not_tolerable_when_nothing_written() {
+        assert!(!tail_failures_are_tolerable(None, &[1, 2, 3], 6));
     }
 }

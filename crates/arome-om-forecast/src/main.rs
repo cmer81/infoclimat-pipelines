@@ -27,10 +27,18 @@ use pipeline_core::omfile_io::{OmfileMetadata, write_multi_variable_omfile};
 use pipeline_core::r2::{CACHE_ROLLING, R2Client, R2Config};
 
 use arome_om_forecast::grib_decoder::{self, DecodedSlice};
-use arome_om_forecast::planning::Package;
+use arome_om_forecast::planning::{self, Package};
 use arome_om_forecast::variables::{VARIABLES, VariableEntry, variables_for_package};
 
-const PUBLICATION_DELAY_H: i64 = 6;
+/// Délai après l'heure du run avant de le considérer disponible.
+///
+/// Météo-France publie les échéances d'AROME-OM **progressivement**, les plus
+/// lointaines (jusqu'à 48h) en dernier. Mesures sur l'API : à ~7h après le run
+/// les échéances ~0-47 sont là mais pas la 48h ; un run « lent » n'a parfois
+/// publié que H0 à ~7h. À ~12-13h le run est complet. On vise donc un run d'âge
+/// ~13h au moment du cron (`0 1,7,13,19` UTC) pour fetcher un run complet. Le
+/// filet [`planning::tail_failures_are_tolerable`] couvre le résiduel.
+const PUBLICATION_DELAY_H: i64 = 12;
 /// Cadence des runs AROME-OM : 00/06/12/18 UTC → un run toutes les 6 heures.
 const RUN_INTERVAL_H: i64 = 6;
 
@@ -168,6 +176,10 @@ async fn main() -> Result<()> {
     let mut prev_tp = ndarray::Array2::<f32>::zeros((grid.ny(), grid.nx()));
     let mut written = 0u32;
     let mut failures = 0u32;
+    // Plus grand leadtime écrit + leadtimes échoués : sert à distinguer une
+    // queue d'échéances non encore publiées (toléré) d'un vrai trou / run cassé.
+    let mut max_written_leadtime: Option<u32> = None;
+    let mut failed_leadtimes: Vec<u32> = Vec::new();
 
     while let Some((leadtime, res)) = decoded.next().await {
         match res {
@@ -189,16 +201,20 @@ async fn main() -> Result<()> {
                 {
                     Ok(()) => {
                         written += 1;
+                        max_written_leadtime =
+                            Some(max_written_leadtime.map_or(leadtime, |m| m.max(leadtime)));
                         tracing::info!(leadtime, "leadtime OK");
                     }
                     Err(e) => {
                         failures += 1;
+                        failed_leadtimes.push(leadtime);
                         tracing::error!(leadtime, error = %e, "write/upload FAILED");
                     }
                 }
             }
             Err(e) => {
                 failures += 1;
+                failed_leadtimes.push(leadtime);
                 tracing::error!(leadtime, error = %e, "leadtime FAILED");
                 if matches!(e.downcast_ref::<MeteoFranceError>(), Some(MeteoFranceError::Auth(_))) {
                     tracing::error!("auth error — aborting");
@@ -233,7 +249,30 @@ async fn main() -> Result<()> {
         }
     }
 
-    if failures > 0 || written == 0 {
+    if failures > 0 {
+        failed_leadtimes.sort_unstable();
+        if planning::tail_failures_are_tolerable(
+            max_written_leadtime,
+            &failed_leadtimes,
+            planning::MAX_TAIL_FAILURES_TOLERATED,
+        ) {
+            // Échecs de queue uniquement (échéances longues pas encore publiées
+            // par MF) — on log mais on ne fait pas échouer le run.
+            tracing::warn!(
+                ?failed_leadtimes,
+                max_written = max_written_leadtime,
+                "tolerated tail failures (MF publication lag) — run considered OK"
+            );
+        } else {
+            tracing::error!(
+                ?failed_leadtimes,
+                max_written = max_written_leadtime,
+                "non-tolerable failures (interior hole or too many) — run failed"
+            );
+            std::process::exit(1);
+        }
+    } else if written == 0 {
+        tracing::error!("no timestep written — run failed");
         std::process::exit(1);
     }
     Ok(())
@@ -379,18 +418,18 @@ mod tests {
 
     #[test]
     fn latest_run_floors_to_6h_with_publication_delay() {
-        // 2026-05-28 14:23Z → candidate = 08:23Z → floor_6h = 06:00Z.
+        // PUBLICATION_DELAY_H = 12 : 2026-05-28 14:23Z → candidate = 02:23Z → floor_6h = 00:00Z.
         let now = Utc.with_ymd_and_hms(2026, 5, 28, 14, 23, 0).unwrap();
         let run = latest_run(now);
-        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 28, 6, 0, 0).unwrap());
+        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 28, 0, 0, 0).unwrap());
     }
 
     #[test]
     fn latest_run_handles_day_boundary() {
-        // 2026-05-28 01:00Z → candidate = 2026-05-27 19:00Z → floor_6h = 18:00Z J-1.
+        // 2026-05-28 01:00Z → candidate = 2026-05-27 13:00Z → floor_6h = 12:00Z J-1.
         let now = Utc.with_ymd_and_hms(2026, 5, 28, 1, 0, 0).unwrap();
         let run = latest_run(now);
-        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 27, 18, 0, 0).unwrap());
+        assert_eq!(run, Utc.with_ymd_and_hms(2026, 5, 27, 12, 0, 0).unwrap());
     }
 
     #[test]
